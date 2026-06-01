@@ -121,6 +121,69 @@
   function zoomOut() { bus.emit('tl:zoom', -1); }
 
   /* =======================================================================
+   * 快捷键说明面板（与下方 TABLE 同源维护）
+   * ===================================================================== */
+  var HELP_GROUPS = [
+    { title: '播放 / 定位', items: [
+      ['空格', '播放 / 暂停'],
+      ['← / →', '后退 / 前进一帧'],
+      ['Shift + ← / →', '后退 / 前进 1 秒'],
+      ['Home / End', '跳到开头 / 结尾'],
+    ] },
+    { title: '剪辑片段', items: [
+      ['Ctrl + B', '在播放头处分割选中片段'],
+      ['Delete', '删除选中片段（留空隙）'],
+      ['Backspace', '波纹删除（删除并使后续片段前移补缝）'],
+      ['Ctrl + C / Ctrl + V', '复制 / 粘贴片段到播放头'],
+      ['Ctrl + D', '原地复制一份片段'],
+    ] },
+    { title: '选择 / 撤销', items: [
+      ['↑ / ↓', '选择上层 / 下层轨道的片段'],
+      ['Esc', '取消选中'],
+      ['Ctrl + Z', '撤销'],
+      ['Ctrl + Shift + Z / Ctrl + Y', '重做'],
+    ] },
+    { title: '视图 / 其它', items: [
+      ['+ / -', '放大 / 缩小时间轴'],
+      ['Ctrl + S', '打开导出'],
+      ['F1 / ?', '显示本快捷键说明'],
+    ] },
+  ];
+
+  var helpDlg = null;
+  function buildHelp() {
+    var dlg = document.createElement('dialog');
+    dlg.id = 'shortcutsDialog';
+    var h = '<div class="sc-head"><span class="sc-title">⌨ 快捷键</span>' +
+            '<button type="button" class="sc-close" id="scClose">关闭</button></div><div class="sc-body">';
+    HELP_GROUPS.forEach(function (g) {
+      h += '<div class="sc-group"><div class="sc-gtitle">' + g.title + '</div><table class="sc-table">';
+      g.items.forEach(function (it) {
+        var keys = '<kbd>' + it[0].replace(/ \/ /g, '</kbd> / <kbd>') + '</kbd>';
+        h += '<tr><td class="sc-keys">' + keys + '</td><td class="sc-desc">' + it[1] + '</td></tr>';
+      });
+      h += '</table></div>';
+    });
+    h += '</div><div class="sc-foot">提示：在输入框里打字时，仅 Ctrl+Z / 重做 / Esc 生效，其余按键用于正常输入。</div>';
+    dlg.innerHTML = h;
+    document.body.appendChild(dlg);
+    dlg.addEventListener('click', function (e) { if (e.target === dlg) closeHelp(); });
+    var cb = dlg.querySelector('#scClose'); if (cb) cb.addEventListener('click', closeHelp);
+    return dlg;
+  }
+  function showHelp() {
+    if (!helpDlg) helpDlg = buildHelp();
+    if (typeof helpDlg.showModal === 'function') { if (!helpDlg.open) helpDlg.showModal(); }
+    else helpDlg.setAttribute('open', '');
+  }
+  function closeHelp() {
+    if (!helpDlg) return;
+    if (typeof helpDlg.close === 'function') { if (helpDlg.open) helpDlg.close(); }
+    else helpDlg.removeAttribute('open');
+  }
+  if (App) App.showShortcuts = showHelp;
+
+  /* =======================================================================
    * 键位表（contract §7）—— key 规范化字符串
    * ===================================================================== */
   var TABLE = {
@@ -154,7 +217,11 @@
 
     'ctrl+s'          : function (e) { e.preventDefault(); openExport(); },
     'escape'          : function () { clearSelection(); },
-    'ctrl+a'          : function (e) { /* 全选当前轨片段（可选，未实现）*/ }
+    'ctrl+a'          : function (e) { /* 全选当前轨片段（可选，未实现）*/ },
+
+    'f1'              : function (e) { e.preventDefault(); showHelp(); },
+    '?'               : function (e) { e.preventDefault(); showHelp(); },
+    'shift+?'         : function (e) { e.preventDefault(); showHelp(); }
   };
 
   /* ---------- 规范化组合键 ---------- */
@@ -201,5 +268,13 @@
     var fn = TABLE[combo];
     if (fn) fn(e);
   });
+
+  /* 工具栏「⌨ 快捷键」按钮 → 打开说明面板 */
+  function bindHelpBtn() {
+    var b = document.getElementById('btnShortcuts');
+    if (b) b.addEventListener('click', showHelp);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindHelpBtn);
+  else bindHelpBtn();
 
 })();

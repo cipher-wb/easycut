@@ -921,7 +921,8 @@
     bindZoom();
     bindAddTrack();
     bindBinDrop();
-    bindOsFileDrop();
+    // 注意：OS 文件拖入窗口的导入由 app.js 的 bindOsFileDrop 统一处理。
+    // 此处不再重复绑定，否则同一次拖放会被两个 window 监听各上传一次 → 素材库出现两条。
     bindBus();
     renderAll();
   }
