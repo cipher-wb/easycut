@@ -686,7 +686,7 @@
       if (!hasMediaId(e)) return;
       e.preventDefault();
       e.dataTransfer.dropEffect = 'copy';
-      var lane = e.target.closest('.track-row');
+      var lane = laneAt(e);
       if (lane) {
         var track = findTrack(lane.dataset.trackId);
         if (track && track.kind === 'video' && !track.locked) {
@@ -702,7 +702,7 @@
       if (!mediaId) return;
       e.preventDefault();
       hideInsertCue();
-      var lane = e.target.closest('.track-row');
+      var lane = laneAt(e);
       if (!lane) return;
       var track = findTrack(lane.dataset.trackId);
       if (!track || track.kind !== 'video' || track.locked) { App.toast && App.toast('请拖到未锁定的视频轨', 'error'); return; }
@@ -727,6 +727,18 @@
   function getMediaId(e) {
     if (!e.dataTransfer) return '';
     return e.dataTransfer.getData('application/x-mediaid') || e.dataTransfer.getData('text/x-mediaid') || '';
+  }
+  // 定位拖放目标轨道行：优先用事件目标的 .track-row 祖先；若被刻度线/播放头等覆盖层拦截，
+  // 则兜底按 clientY 在 #tracksArea 的各 .track-row 中按几何命中（不依赖 z 序/命中元素）。
+  function laneAt(e) {
+    var lane = (e.target && e.target.closest) ? e.target.closest('.track-row') : null;
+    if (lane) return lane;
+    var rows = elArea ? elArea.querySelectorAll('.track-row') : [];
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i].getBoundingClientRect();
+      if (e.clientY >= r.top && e.clientY < r.bottom) return rows[i];
+    }
+    return null;
   }
   function dropTimeAt(clientX, altKey, dur) {
     var t = clientXToTime(clientX);   // 以 #tracksArea 左缘为原点（含滚动），与片段/播放头同 0 点

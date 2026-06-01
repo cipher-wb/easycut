@@ -370,12 +370,13 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 4px;
   border-bottom: 1px solid var(--line);
   font-size: 10px; color: var(--text-dim);
 }
-#timelineRuler .tick {
+#timelineRuler .tl-tick {
   position: absolute; top: 0; height: 100%;
   border-left: 1px solid var(--line); padding-left: 3px; line-height: var(--ruler-h);
   font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
 }
-#timelineRuler .tick.minor { border-left-color: #2c2f37; }
+#timelineRuler .tl-tick.minor { border-left-color: #2c2f37; }
+#timelineRuler .tl-tick-label { pointer-events: none; }
 
 /* 轨道行区（绝对定位片段块；宽 = totalDuration*pxPerSec） */
 #tracksArea { position: relative; }
