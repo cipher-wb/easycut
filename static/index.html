@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>简单剪辑 — 本地视频标注与剪辑</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <!-- ===== 顶部工具栏 ===== -->
+  <div id="toolbar">
+    <div class="tb-group">
+      <button id="btnImport" type="button" title="导入 mp4（可多选），每个文件作为一段追加到时间轴">＋ 导入 mp4</button>
+      <button id="btnAddText" type="button" disabled title="在画面中央添加一条中文文字">Ａ 添加文字</button>
+    </div>
+    <div class="tb-group">
+      <button id="btnSplit" type="button" disabled title="在当前播放头处把片段切成两段">✂ 在此分割</button>
+      <button id="btnDeleteClip" type="button" disabled title="删除当前选中的片段">🗑 删除片段</button>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-group tb-play">
+      <button id="btnPlayPause" type="button" disabled title="播放 / 暂停">▶</button>
+      <span id="lblTimecode" class="timecode">00:00.0 / 00:00.0</span>
+    </div>
+    <div class="tb-spacer"></div>
+    <div class="tb-group">
+      <button id="btnExport" type="button" disabled class="primary" title="导出为新的 mp4 文件">⬇ 导出视频</button>
+    </div>
+  </div>
+
+  <!-- ===== 主体三栏：预览 + 属性面板 ===== -->
+  <div id="main">
+    <!-- 中部预览区 -->
+    <section id="preview">
+      <div id="stage">
+        <div id="videoWrap">
+          <video id="video" playsinline preload="auto"></video>
+          <div id="overlayLayer"></div>
+        </div>
+        <div id="emptyHint">
+          <div class="eh-icon">🎬</div>
+          <div class="eh-title">还没有视频</div>
+          <div class="eh-sub">点击左上角“＋ 导入 mp4”添加视频开始剪辑</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右侧属性面板 -->
+    <aside id="propPanel">
+      <!-- 未选中提示 -->
+      <div id="propEmpty" class="prop-empty">
+        <p>未选中文字对象。</p>
+        <p class="hint">在画面中点击某条文字，或点击工具栏“添加文字”来创建并编辑。</p>
+      </div>
+
+      <!-- 文字属性分区 -->
+      <div id="propTextSection" class="prop-section" hidden>
+        <h3 class="prop-h">文字属性</h3>
+
+        <label class="field">
+          <span>文字内容（可多行）</span>
+          <textarea id="inpTextContent" rows="3" placeholder="输入中文说明…"></textarea>
+        </label>
+
+        <label class="field">
+          <span>字号（占画面高度比例）</span>
+          <div class="row">
+            <input type="range" id="rngFontSize" min="0.01" max="0.5" step="0.001" />
+            <input type="number" id="numFontSize" min="1" max="50" step="0.1" class="num-sm" title="百分比 %" />
+            <span class="unit">%</span>
+          </div>
+        </label>
+
+        <div class="row two">
+          <label class="field">
+            <span>文字颜色</span>
+            <input type="color" id="colTextColor" />
+          </label>
+          <label class="field">
+            <span>不透明度</span>
+            <input type="range" id="rngTextOpacity" min="0" max="1" step="0.01" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span>对齐方式</span>
+          <select id="selTextAlign">
+            <option value="left">左对齐</option>
+            <option value="center">居中</option>
+            <option value="right">右对齐</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>字体</span>
+          <select id="selFontFile"></select>
+        </label>
+
+        <fieldset class="group">
+          <legend><label class="inline"><input type="checkbox" id="chkBorder" /> 描边</label></legend>
+          <div class="row two">
+            <label class="field">
+              <span>描边颜色</span>
+              <input type="color" id="colBorderColor" />
+            </label>
+            <label class="field">
+              <span>描边宽度</span>
+              <input type="range" id="rngBorderW" min="0" max="0.02" step="0.0005" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="group">
+          <legend><label class="inline"><input type="checkbox" id="chkBox" /> 半透明底框</label></legend>
+          <div class="row two">
+            <label class="field">
+              <span>底框颜色</span>
+              <input type="color" id="colBoxColor" />
+            </label>
+            <label class="field">
+              <span>底框不透明度</span>
+              <input type="range" id="rngBoxOpacity" min="0" max="1" step="0.01" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset class="group">
+          <legend>显示时间段（输出流秒）</legend>
+          <div class="row two">
+            <label class="field">
+              <span>出现时间</span>
+              <div class="row">
+                <input type="number" id="numTextStart" min="0" step="0.1" class="num-sm" />
+                <button type="button" id="btnSetStartNow" class="mini" title="设为当前播放头">取当前</button>
+              </div>
+            </label>
+            <label class="field">
+              <span>消失时间</span>
+              <div class="row">
+                <input type="number" id="numTextEnd" min="0" step="0.1" class="num-sm" />
+                <button type="button" id="btnSetEndNow" class="mini" title="设为当前播放头">取当前</button>
+              </div>
+            </label>
+          </div>
+        </fieldset>
+
+        <button type="button" id="btnDeleteText" class="danger full">删除这条文字</button>
+      </div>
+
+      <!-- 输出设置分区（常驻底部） -->
+      <div id="propOutputSection" class="prop-section out-section">
+        <h3 class="prop-h">导出设置</h3>
+        <label class="field">
+          <span>分辨率预设</span>
+          <select id="selResPreset">
+            <option value="source">源原始分辨率</option>
+            <option value="1920x1080">1920 × 1080</option>
+            <option value="1280x720">1280 × 720</option>
+            <option value="custom">自定义</option>
+          </select>
+        </label>
+        <div class="row two">
+          <label class="field">
+            <span>宽度</span>
+            <input type="number" id="numOutWidth" min="2" step="2" />
+          </label>
+          <label class="field">
+            <span>高度</span>
+            <input type="number" id="numOutHeight" min="2" step="2" />
+          </label>
+        </div>
+        <div class="row two">
+          <label class="field">
+            <span>帧率 fps</span>
+            <input type="number" id="numOutFps" min="1" max="120" step="1" />
+          </label>
+          <label class="field">
+            <span>画质 CRF（小=清晰）</span>
+            <input type="number" id="numCrf" min="0" max="51" step="1" />
+          </label>
+        </div>
+        <label class="inline">
+          <input type="checkbox" id="chkKeepAudio" /> 保留音轨
+        </label>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ===== 底部时间轴 ===== -->
+  <div id="timelinePanel">
+    <div class="tl-head">
+      <span class="tl-title">时间轴</span>
+      <span class="tl-hint">拖动片段可重排顺序 · 点击轨道或拖动滑块定位播放头</span>
+    </div>
+    <input type="range" id="timelineScrubber" min="0" max="0" step="0.01" value="0" disabled />
+    <div id="timeline">
+      <div id="timelineRuler"></div>
+      <div id="timelineTrack">
+        <div id="playhead"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 导出弹窗 ===== -->
+  <dialog id="exportDialog">
+    <form method="dialog" class="export-box">
+      <h3>导出视频</h3>
+      <div class="export-summary" id="exportSummary"></div>
+      <div class="progress-wrap">
+        <progress id="progressBar" value="0" max="1"></progress>
+        <span id="progressText">准备就绪</span>
+      </div>
+      <pre id="exportLog" class="export-log" hidden></pre>
+      <div class="export-actions">
+        <button type="button" id="btnExportStart" class="primary">开始导出</button>
+        <button type="button" id="btnOpenFolder" hidden>打开所在文件夹</button>
+        <button type="button" id="btnExportCancel">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ===== 轻提示 ===== -->
+  <div id="toast"></div>
+
+  <!-- app.js 必须最先加载（唯一状态源 + 事件总线 + api） -->
+  <script src="/static/app.js"></script>
+  <script src="/static/player.js"></script>
+  <script src="/static/timeline.js"></script>
+  <script src="/static/overlay.js"></script>
+  <script src="/static/export.js"></script>
+</body>
+</html>

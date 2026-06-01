@@ -1,0 +1,17 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 设计 / 测试 / 临时产物（内部脚手架，非交付物）
+_build/
+
+# 运行日志与临时工作目录
+*.log
+.work/
+jianjianji_work/
+
+# 系统 / 编辑器
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
