@@ -333,6 +333,16 @@
     <div id="timelineToolbar">
       <span class="tl-title">时间轴</span>
       <span class="tl-sep"></span>
+      <div class="tlb-edit">
+        <button id="btnTlSplit" type="button" class="tlb-btn" disabled title="在播放头处分割选中片段 (Ctrl+B)">✂ 分割</button>
+        <button id="btnTlDelete" type="button" class="tlb-btn" disabled title="删除选中片段 (Delete)">🗑 删除</button>
+        <button id="btnTlRipple" type="button" class="tlb-btn" disabled title="波纹删除：删除并把同轨后续片段前移补缝 (Backspace)">⟲ 波纹删除</button>
+        <button id="btnTlDup" type="button" class="tlb-btn" disabled title="复制选中片段为副本 (Ctrl+D)">⎘ 复制</button>
+        <span class="tlb-vsep"></span>
+        <button id="btnTlUndo" type="button" class="tlb-btn" disabled title="撤销 (Ctrl+Z)">↶ 撤销</button>
+        <button id="btnTlRedo" type="button" class="tlb-btn" disabled title="重做 (Ctrl+Shift+Z / Ctrl+Y)">↷ 重做</button>
+      </div>
+      <span class="tl-sep"></span>
       <button id="btnZoomOut" type="button" class="mini" title="缩小 (-)">－</button>
       <input type="range" id="rngZoom" min="4" max="400" step="1" value="80" title="时间轴缩放" />
       <button id="btnZoomIn" type="button" class="mini" title="放大 (+)">＋</button>

@@ -307,6 +307,17 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 4px;
 .tl-snaphint { font-size: 11px; color: var(--text-faint); }
 .tl-total { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
 
+/* 时间轴上方·剪辑工具条 */
+#timelineToolbar .tlb-edit { display: flex; align-items: center; gap: 4px; }
+#timelineToolbar .tlb-btn {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 3px 9px; font-size: 12px; line-height: 1.4; cursor: pointer;
+  white-space: nowrap;
+}
+#timelineToolbar .tlb-btn:hover:not(:disabled) { background: var(--line); }
+#timelineToolbar .tlb-btn:disabled { opacity: .4; cursor: default; }
+#timelineToolbar .tlb-vsep { width: 1px; height: 18px; background: var(--line); margin: 0 4px; }
+
 /* 主体：左轨道头 + 右滚动区，纵向同步滚动 */
 #timelineScroll {
   flex: 1 1 auto; min-height: 0;

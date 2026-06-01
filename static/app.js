@@ -569,6 +569,53 @@
     return clip.id;
   }
 
+  /* 复制 / 粘贴 / 副本（剪映 Ctrl+C / Ctrl+V / Ctrl+D 与时间轴工具条「复制」）。 */
+  var clipboard = null; // { kind:'video'|'text', clip:<深拷贝> }
+  function _newClipId(track) { return (track.kind === 'video') ? nextId('clip') : nextId('txt'); }
+  function _insertClipInto(track, clipObj, startSec) {
+    var dur = clipDur(clipObj, track);
+    var placed = resolveOverlap(track, null, Math.max(0, startSec), dur);
+    if (placed == null) {
+      var endT = 0;
+      track.clips.forEach(function (c) { endT = Math.max(endT, c.start + clipDur(c, track)); });
+      placed = resolveOverlap(track, null, endT, dur);
+    }
+    if (placed == null) return null;
+    clipObj.start = placed;
+    track.clips.push(clipObj);
+    return clipObj.id;
+  }
+  function duplicateClip(trackId, clipId) {
+    var track = getTrack(trackId); if (!track) return null;
+    if (track.locked) { toast('该轨道已锁定', 'error'); return null; }
+    var clip = getClipIn(trackId, clipId); if (!clip) return null;
+    pushHistory();
+    var copy = JSON.parse(JSON.stringify(clip)); copy.id = _newClipId(track);
+    var id = _insertClipInto(track, copy, clip.start + clipDur(clip, track));
+    if (id == null) { toast('该轨道没有足够空位放置副本', 'error'); return null; }
+    changed('duplicateClip'); bus.emit('clips:changed', { trackId: track.id });
+    selectClip(track.id, id); return id;
+  }
+  function copyClip(trackId, clipId) {
+    var track = getTrack(trackId); var clip = getClipIn(trackId, clipId);
+    if (!track || !clip) return;
+    clipboard = { kind: track.kind, clip: JSON.parse(JSON.stringify(clip)) };
+    toast('已复制片段', null, 1100);
+  }
+  function pasteClip(atSec) {
+    if (!clipboard) { toast('剪贴板为空', null, 1200); return null; }
+    var target = null, i, tk;
+    if (selection && selection.trackId) { var t = getTrack(selection.trackId); if (t && t.kind === clipboard.kind && !t.locked) target = t; }
+    if (!target) { for (i = 0; i < project.tracks.length; i++) { tk = project.tracks[i]; if (tk.kind === clipboard.kind && !tk.locked) { target = tk; break; } } }
+    if (!target) { toast('没有可粘贴的' + (clipboard.kind === 'text' ? '文字' : '视频') + '轨', 'error'); return null; }
+    pushHistory();
+    var copy = JSON.parse(JSON.stringify(clipboard.clip)); copy.id = _newClipId(target);
+    var id = _insertClipInto(target, copy, Math.max(0, num(atSec, getPlayhead())));
+    if (id == null) { toast('该轨道没有足够空位粘贴', 'error'); return null; }
+    changed('pasteClip'); bus.emit('clips:changed', { trackId: target.id });
+    selectClip(target.id, id); return id;
+  }
+
   // 在时间轴绝对秒 atSec 切分（video 或 text）。返回 [leftId, rightId] 或 null。
   function splitClip(trackId, clipId, atSec) {
     var track = getTrack(trackId); if (!track) return null;
@@ -1383,6 +1430,16 @@
     var bp = $('btnPlayPause'); if (bp) bp.addEventListener('click', function () { togglePlay(); });
     var bx = $('btnExport'); if (bx) bx.addEventListener('click', function () { bus.emit('export:open', {}); });
 
+    // 时间轴工具条（btnTl*）：与顶部按钮并存，复用同一套动作。
+    function needSel() { if (!selection || !selection.clipId) { toast('请先选中一个片段', null, 1600); return false; } return true; }
+    function bindClickById(id, fn) { var e = $(id); if (e) e.addEventListener('click', fn); }
+    bindClickById('btnTlSplit', function () { if (!selection || selection.kind === 'track' || !selection.clipId) { toast('请先选中一个片段', null, 1600); return; } splitClip(selection.trackId, selection.clipId, getPlayhead()); });
+    bindClickById('btnTlDelete', function () { if (!needSel()) return; removeClip(selection.trackId, selection.clipId); });
+    bindClickById('btnTlRipple', function () { if (!needSel()) return; rippleRemoveClip(selection.trackId, selection.clipId); });
+    bindClickById('btnTlDup', function () { if (!needSel()) return; duplicateClip(selection.trackId, selection.clipId); });
+    bindClickById('btnTlUndo', function () { undo(); });
+    bindClickById('btnTlRedo', function () { redo(); });
+
     // +轨道 菜单（contract_v2 §4.1 #addTrackMenu）：
     // 由 timeline.js 的 bindAddTrack() 唯一拥有按钮 #btnAddTrack 与菜单 #addTrackMenu
     // 的点击/开合逻辑。此处不再重复绑定，否则两个 click 监听会双切换（菜单永远打不开）
@@ -1402,9 +1459,12 @@
   // 空时间轴：禁用导出/播放/分割（contract_v2 §6.9 B1）
   function refreshButtonStates() {
     var has = totalDuration() > 0;
-    [['btnExport', !has], ['btnPlayPause', !has], ['btnSplit', !has],
-     ['btnDeleteClip', !(selection && selection.clipId)],
-     ['btnRippleDelete', !(selection && selection.clipId)]
+    var noSel = !(selection && selection.clipId);
+    [['btnExport', !has], ['btnPlayPause', !has],
+     ['btnSplit', !has], ['btnTlSplit', noSel],
+     ['btnDeleteClip', noSel], ['btnTlDelete', noSel],
+     ['btnRippleDelete', noSel], ['btnTlRipple', noSel],
+     ['btnTlDup', noSel]
     ].forEach(function (pair) { var el = $(pair[0]); if (el) el.disabled = pair[1]; });
     var hint = $('emptyHint'); if (hint) hint.style.display = has ? 'none' : '';
   }
@@ -1453,6 +1513,7 @@
     addClipFromMedia: addClipFromMedia, splitClip: splitClip, removeClip: removeClip,
     rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip,
     setClipTransform: setClipTransform, getClip: getClip,
+    duplicateClip: duplicateClip, copyClip: copyClip, pasteClip: pasteClip,
 
     // 文字片段
     addTextClip: addTextClip, setTextProp: setTextProp,
