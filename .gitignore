@@ -10,6 +10,10 @@ _build/
 .work/
 jianjianji_work/
 
+# 用户数据：工程库与持久素材库（不进仓库）
+projects/
+media_store/
+
 # 系统 / 编辑器
 Thumbs.db
 .DS_Store

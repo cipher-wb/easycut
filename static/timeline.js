@@ -263,10 +263,18 @@
       c.appendChild(el('span', 'tc-label clip-label', (clip.content || '文字').replace(/\n/g, ' ').slice(0, 24)));
     } else {
       var m = App.getMedia ? App.getMedia(clip.mediaId) : null;
-      if (m && m.thumbUrl) c.style.backgroundImage = 'url("' + m.thumbUrl + '")';
-      c.appendChild(el('span', 'clip-label', m ? m.name : '片段'));
-      var thumb = el('div', 'clip-thumb');
-      c.appendChild(thumb);
+      // 离线素材（工程系统）：原文件丢失 → 加 .offline 样式，标“素材离线”，
+      // 不设 backgroundImage（缩略图已失效，避免请求 404）；其余把手/角标保留，
+      // 离线片段仍可选中 / 移动 / 删除（保留全部属性）。
+      if (m && m.offline) {
+        c.classList.add('offline');
+        c.appendChild(el('span', 'clip-label', '⚠ 素材离线 · ' + (m.name || '片段')));
+      } else {
+        if (m && m.thumbUrl) c.style.backgroundImage = 'url("' + m.thumbUrl + '")';
+        c.appendChild(el('span', 'clip-label', m ? m.name : '片段'));
+        var thumb = el('div', 'clip-thumb');
+        c.appendChild(thumb);
+      }
     }
     c.appendChild(el('div', 'clip-trim left'));
     c.appendChild(el('div', 'clip-trim right'));

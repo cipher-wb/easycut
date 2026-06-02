@@ -439,6 +439,8 @@
       var seg = vt.track.hidden ? null : activeClipOnTrack(vt, t);
 
       if (!seg) { p.clearMedia(); continue; }            // 间隙/隐藏 → 透明
+      // 离线素材(streamId 失效)无可播放源 → 该段留黑, 不请求 /api/stream?id=null (设计 §4.1)
+      if (!seg.media || !seg.media.streamId || seg.media.offline) { p.clearMedia(); continue; }
 
       var spd = (seg.clip.speed || 1);                   // 变速倍率(默认 1)
       // 公式 B: 期望源时刻 = in + (t - start) * speed (video 以 playbackRate 自行前进, 此为源秒域)

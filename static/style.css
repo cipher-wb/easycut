@@ -626,3 +626,124 @@ progress::-webkit-progress-value { background: var(--accent); }
 ::-webkit-scrollbar-thumb { background: #3d4049; border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: #4a4e59; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ===================================================================
+   工程系统：工具栏工程名 + 未保存指示
+   =================================================================== */
+.tb-group.tb-project { gap: 6px; }
+.proj-name {
+  display: inline-flex; align-items: center; gap: 5px;
+  max-width: 200px; padding: 0 4px;
+  font-size: 13px; color: var(--text);
+  font-weight: 600;
+}
+.proj-name .pn-text {
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.proj-name.is-unnamed { color: var(--text-faint); font-weight: 500; font-style: italic; }
+.proj-name .unsaved-dot { color: var(--accent); font-size: 14px; line-height: 1; }
+
+/* ===================================================================
+   离线素材横幅 #offlineBanner
+   =================================================================== */
+#offlineBanner {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 14px;
+  background: #3a2b22; border-bottom: 1px solid #6a4a2f;
+  color: #ffd9b3; font-size: 13px;
+}
+#offlineBanner[hidden] { display: none; }
+#offlineBanner .ob-icon { font-size: 15px; color: #ffb155; }
+#offlineBanner .ob-text { flex: 1 1 auto; }
+#offlineBanner .ob-btn {
+  background: #5a3f28; border-color: #7a5634; color: #ffe0c0;
+  padding: 3px 12px; font-size: 12px; border-radius: 5px;
+}
+#offlineBanner .ob-btn:hover:not(:disabled) { background: #6a4a2f; }
+#offlineBanner .ob-close {
+  background: transparent; border: none; color: #d9b89a; padding: 2px 6px; font-size: 13px;
+}
+#offlineBanner .ob-close:hover { color: #fff; background: rgba(0,0,0,.2); }
+
+/* ===================================================================
+   工程选择面板 #projectDialog
+   =================================================================== */
+#projectDialog {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); color: var(--text); padding: 0;
+  width: 520px; max-width: 92vw; box-shadow: var(--shadow-pop);
+}
+#projectDialog::backdrop { background: rgba(0,0,0,.6); }
+.proj-box { display: flex; flex-direction: column; max-height: 76vh; }
+.proj-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--line);
+}
+.proj-title { font-size: 16px; font-weight: 700; }
+.proj-close {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 4px 14px; cursor: pointer;
+}
+.proj-close:hover { background: var(--line); }
+.proj-body { padding: 14px 16px; overflow: auto; }
+.proj-new { width: 100%; padding: 9px; font-size: 13px; margin-bottom: 14px; }
+.proj-list-title { font-size: 12px; color: var(--accent); font-weight: 700; margin-bottom: 8px; }
+.proj-list { display: flex; flex-direction: column; gap: 6px; }
+.project-item {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 9px 12px; transition: border-color .12s, background .12s;
+}
+.project-item:hover { border-color: var(--accent); background: var(--panel-3); }
+.project-item .pi-main { flex: 1 1 auto; min-width: 0; cursor: pointer; }
+.project-item .pi-name {
+  font-size: 13px; color: var(--text); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-item .pi-time { font-size: 11px; color: var(--text-dim); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.project-item .pi-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.proj-empty { padding: 24px 8px; text-align: center; color: var(--text-faint); font-size: 13px; }
+
+/* ===================================================================
+   保存命名 / 另存为对话框 #saveNameDialog
+   =================================================================== */
+#saveNameDialog {
+  border: 1px solid var(--line); border-radius: 10px;
+  background: var(--panel); color: var(--text); padding: 0;
+  width: 380px; max-width: 92vw; box-shadow: var(--shadow-pop);
+}
+#saveNameDialog::backdrop { background: rgba(0,0,0,.55); }
+.savename-box { padding: 18px 20px; }
+.savename-box h3 { margin: 0 0 14px; font-size: 16px; }
+.savename-box .field { display: block; }
+.savename-box .field > span { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+.savename-box input[type="text"] { width: 100%; padding: 8px 10px; font-size: 14px; }
+.savename-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+/* ===================================================================
+   离线素材卡片 .media-item.offline + 时间轴离线片段 .clip.offline
+   =================================================================== */
+.media-item.offline { border-color: #7a4242; filter: saturate(.4); }
+.media-item.offline:hover { border-color: var(--danger); }
+.media-item.offline .mi-thumb { opacity: .5; }
+.mi-offline-badge {
+  position: absolute; top: 6px; left: 6px;
+  background: var(--danger); color: #fff; font-size: 10px;
+  padding: 1px 6px; border-radius: 8px; line-height: 1.4;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+}
+.mi-relink {
+  width: 100%; margin-top: 6px; padding: 4px 8px;
+  font-size: 11px; border-radius: 5px;
+  background: #4a2f2f; border-color: #7a4242; color: #ffc7c7;
+}
+.mi-relink:hover:not(:disabled) { background: #5a3737; }
+
+.clip.offline {
+  background-image: repeating-linear-gradient(
+    45deg, rgba(224,86,86,.28) 0, rgba(224,86,86,.28) 8px,
+    rgba(224,86,86,.12) 8px, rgba(224,86,86,.12) 16px) !important;
+  border-color: var(--danger) !important;
+}
+.clip.offline .clip-label { color: #ffd0d0; }

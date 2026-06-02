@@ -30,6 +30,8 @@ v2 媒体库模型：每个导入文件分配 mediaId("med_N") + streamId("src_N
 import os
 import sys
 import json
+import time
+import random
 import shutil
 import tempfile
 import threading
@@ -52,12 +54,25 @@ HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 STREAM_CHUNK = 64 * 1024  # 64KB/块
 
-# 工作目录（上传副本 / 缩略图缓存 / 导出临时文件）
+# 工作目录（导出临时文件 / 缩略图缓存）
 WORK_ROOT = os.path.join(tempfile.gettempdir(), "jianjianji_work")
-UPLOAD_DIR = os.path.join(WORK_ROOT, "uploads")
+UPLOAD_DIR = os.path.join(WORK_ROOT, "uploads")  # 历史目录（保留，不再写入）
 THUMB_DIR = os.path.join(WORK_ROOT, "thumbs")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
+
+# 工程库 / 持久素材库（app 目录下，便携；见 project_design.md §1.1）
+PROJECTS_DIR = os.path.join(BASE_DIR, "projects")           # 工程库：projects/<id>/project.json
+MEDIA_STORE_DIR = os.path.join(BASE_DIR, "media_store")     # 持久素材库：/api/upload 副本落点
+MEDIA_THUMB_DIR = os.path.join(MEDIA_STORE_DIR, "thumbs")   # 可选缩略图缓存（预留）
+os.makedirs(PROJECTS_DIR, exist_ok=True)
+os.makedirs(MEDIA_STORE_DIR, exist_ok=True)
+os.makedirs(MEDIA_THUMB_DIR, exist_ok=True)
+
+# 工程文件 schema 版本（project.json）
+PROJECT_SCHEMA = 1
+# 探测时长差异阈值（秒）：超过则判定 changed
+_DUR_EPS = 0.05
 
 # 候选 CJK 字体（仅列存在者；见 contract_v2.md §8）
 FONT_CANDIDATES = [
@@ -362,9 +377,69 @@ def _safe_basename(name):
 # ---------------------------------------------------------------------------
 # 导出任务（后台线程跑 ffmpeg + 解析进度）
 # ---------------------------------------------------------------------------
+def _filter_offline_clips(project, source_path_map):
+    """导出前剔除引用了离线/缺源素材的视频片段（见 project_design.md §2.8）。
+    判定缺源：media.streamId 不在 source_path_map，或其路径不存在。
+    返回 (filtered_project, warnings)。不修改入参（浅拷贝 tracks/clips）。
+    全空交由后续 ExportValidationError 拦截，本函数不抛。"""
+    if not isinstance(project, dict):
+        return project, []
+
+    media_by_id = {}
+    for m in (project.get("media") or []):
+        if isinstance(m, dict) and m.get("id") is not None:
+            media_by_id[m["id"]] = m
+
+    def _is_offline(media):
+        if not isinstance(media, dict):
+            return True
+        if media.get("offline") is True:
+            return True
+        sid = media.get("streamId")
+        if not sid or sid not in source_path_map:
+            return True
+        p = source_path_map.get(sid)
+        return not (p and os.path.isfile(p))
+
+    warnings = []
+    skipped_names = set()
+    new_tracks = []
+    changed = False
+    for tr in (project.get("tracks") or []):
+        if not isinstance(tr, dict) or tr.get("kind") != "video":
+            new_tracks.append(tr)
+            continue
+        kept = []
+        for c in (tr.get("clips") or []):
+            if not isinstance(c, dict):
+                kept.append(c)
+                continue
+            media = media_by_id.get(c.get("mediaId"))
+            if _is_offline(media):
+                changed = True
+                nm = (media or {}).get("name") or c.get("mediaId") or "未知素材"
+                skipped_names.add(str(nm))
+                continue
+            kept.append(c)
+        ntr = dict(tr)
+        ntr["clips"] = kept
+        new_tracks.append(ntr)
+
+    if not changed:
+        return project, []
+
+    if skipped_names:
+        warnings.append("已跳过 %d 个离线素材的相关片段：%s。"
+                        % (len(skipped_names), "、".join(sorted(skipped_names))))
+    filtered = dict(project)
+    filtered["tracks"] = new_tracks
+    return filtered, warnings
+
+
 def start_export_job(project, output_path):
     """构建 ffmpeg 命令并启动后台线程。返回 jobId。
     构建/校验失败抛 ffmpeg_build.ExportValidationError（同步 400）。
+    含离线素材时：剔除其相关片段并记 warning（§2.8）；全空仍由校验拦截。
     """
     job_id = _next_job_id()
     work_dir = os.path.join(WORK_ROOT, job_id)
@@ -372,6 +447,8 @@ def start_export_job(project, output_path):
 
     source_path_map = snapshot_streams()
     media_meta = snapshot_media_meta()
+
+    project, skip_warnings = _filter_offline_clips(project, source_path_map)
 
     built = ffmpeg_build.build_export(
         project, output_path, source_path_map, work_dir,
@@ -385,6 +462,7 @@ def start_export_job(project, output_path):
         "outputPath": built["output_path"],
         "error": None,
         "log": [],
+        "warnings": skip_warnings,
         "total_duration": built["total_duration"],
         "args": built["args"],
         "work_dir": work_dir,
@@ -508,6 +586,367 @@ def list_fonts():
 
 
 # ---------------------------------------------------------------------------
+# 工程（项目）系统：存储布局 / project.json 读写 / 加载探测
+# 见 project_design.md §1（布局/schema）、§2（HTTP API 契约）。
+# ---------------------------------------------------------------------------
+_PROJECT_ID_OK = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+
+
+def _safe_project_id(pid):
+    """校验 projectId 只含 [A-Za-z0-9_-]，拒绝穿越/分隔符/空。非法返回 None。"""
+    if not pid or not isinstance(pid, str):
+        return None
+    if ".." in pid or "/" in pid or "\\" in pid or os.sep in pid:
+        return None
+    for ch in pid:
+        if ch not in _PROJECT_ID_OK:
+            return None
+    return pid
+
+
+def _new_project_id():
+    """生成文件系统安全的唯一 projectId：p_<毫秒时间戳>_<4位随机>，确保目录不存在。"""
+    for _ in range(50):
+        rnd = "".join(random.choice("0123456789abcdefghijklmnopqrstuvwxyz") for _ in range(4))
+        pid = "p_%d_%s" % (int(time.time() * 1000), rnd)
+        if not os.path.exists(os.path.join(PROJECTS_DIR, pid)):
+            return pid
+    # 极端回退：用计数避免无限冲突
+    i = 1
+    while os.path.exists(os.path.join(PROJECTS_DIR, "p_%d" % i)):
+        i += 1
+    return "p_%d" % i
+
+
+def _project_dir(pid):
+    return os.path.join(PROJECTS_DIR, pid)
+
+
+def _project_path(pid):
+    return os.path.join(PROJECTS_DIR, pid, "project.json")
+
+
+def _now_ms():
+    return int(time.time() * 1000)
+
+
+def _read_project_json(pid):
+    """读取并解析 projects/<pid>/project.json。失败返回 None（容错，不抛）。"""
+    p = _project_path(pid)
+    if not os.path.isfile(p):
+        return None
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            return obj
+    except Exception as e:
+        print("[projects] 读取损坏，跳过 %s: %s" % (pid, e))
+    return None
+
+
+def _write_project_json(pid, obj):
+    """原子写 projects/<pid>/project.json（先写 .tmp 再 os.replace）。"""
+    d = _project_dir(pid)
+    os.makedirs(d, exist_ok=True)
+    final = _project_path(pid)
+    tmp = final + ".tmp"
+    body = json.dumps(obj, ensure_ascii=False, indent=2)
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(body)
+    os.replace(tmp, final)
+
+
+def _project_meta_from_obj(pid, obj):
+    """从 project.json 对象抽取列表用元信息（容错缺字段）。"""
+    name = obj.get("name")
+    if not name or not str(name).strip():
+        name = "未命名工程"
+    try:
+        created = int(obj.get("createdAt") or 0)
+    except (TypeError, ValueError):
+        created = 0
+    try:
+        modified = int(obj.get("modifiedAt") or created or 0)
+    except (TypeError, ValueError):
+        modified = created
+    return {"id": pid, "name": str(name), "createdAt": created, "modifiedAt": modified}
+
+
+def list_projects():
+    """扫描 projects/*/project.json，返回按 modifiedAt 倒序的元信息列表（容错跳过损坏）。"""
+    out = []
+    try:
+        entries = os.listdir(PROJECTS_DIR)
+    except OSError:
+        entries = []
+    for name in entries:
+        pid = _safe_project_id(name)
+        if not pid:
+            continue
+        if not os.path.isfile(_project_path(pid)):
+            continue
+        obj = _read_project_json(pid)
+        if obj is None:
+            print("[projects] 跳过无法解析的工程: %s" % name)
+            continue
+        out.append(_project_meta_from_obj(pid, obj))
+    out.sort(key=lambda m: m["modifiedAt"], reverse=True)
+    return out
+
+
+def _sanitize_media_for_save(media):
+    """保存时清洗一条 media：剥离 transient（streamId/thumbUrl/offline），path 正斜杠。"""
+    if not isinstance(media, dict):
+        return {}
+    keep = ("id", "path", "name", "width", "height",
+            "duration", "fps", "hasAudio", "imported")
+    out = {}
+    for k in keep:
+        if k in media:
+            out[k] = media[k]
+    if "path" in out and isinstance(out["path"], str):
+        out["path"] = out["path"].replace("\\", "/")
+    return out
+
+
+def save_project(pid, name, project):
+    """新建/覆盖工程。pid 为 None/空 → 新建生成 id；存在则覆盖（保留 createdAt）。
+    返回 {id, name, modifiedAt}。"""
+    name = (str(name).strip() if name is not None else "") or "未命名工程"
+
+    created = None
+    pid = _safe_project_id(pid) if pid else None
+    if pid:
+        existing = _read_project_json(pid)
+        if existing is not None:
+            try:
+                created = int(existing.get("createdAt") or 0) or None
+            except (TypeError, ValueError):
+                created = None
+        else:
+            # 传了 id 但目录不存在/损坏 → 当作新建到该 id
+            pass
+    if not pid:
+        pid = _new_project_id()
+
+    now = _now_ms()
+    if created is None:
+        created = now
+
+    proj = project if isinstance(project, dict) else {}
+    out_media = [_sanitize_media_for_save(m) for m in (proj.get("media") or [])]
+    obj = {
+        "schema": PROJECT_SCHEMA,
+        "id": pid,
+        "name": name,
+        "createdAt": created,
+        "modifiedAt": now,
+        "project": {
+            "output": proj.get("output") or {},
+            "media": out_media,
+            "tracks": proj.get("tracks") or [],
+        },
+    }
+    _write_project_json(pid, obj)
+    return {"id": pid, "name": name, "modifiedAt": now}
+
+
+def delete_project(pid):
+    """删除 projects/<pid>/ 整目录（media_store 副本不删）。返回 True/False。"""
+    pid = _safe_project_id(pid)
+    if not pid:
+        return False
+    d = _project_dir(pid)
+    if not os.path.isdir(d):
+        return False
+    shutil.rmtree(d, ignore_errors=True)
+    return not os.path.isdir(d)
+
+
+def rename_project(pid, name):
+    """只改 project.json 的 name + modifiedAt，不动目录。返回 modifiedAt 或 None。"""
+    pid = _safe_project_id(pid)
+    if not pid:
+        return None
+    obj = _read_project_json(pid)
+    if obj is None:
+        return None
+    name = (str(name).strip() if name is not None else "") or "未命名工程"
+    now = _now_ms()
+    obj["name"] = name
+    obj["modifiedAt"] = now
+    # 确保元字段齐全
+    obj.setdefault("schema", PROJECT_SCHEMA)
+    obj.setdefault("id", pid)
+    obj.setdefault("createdAt", now)
+    _write_project_json(pid, obj)
+    return now
+
+
+def _probe_and_register(path):
+    """对 path 探测 + 登记 streamId。成功返回 (streamId, probe_info)；失败 (None, None)。"""
+    if not path or not os.path.isfile(path):
+        return None, None
+    info = probe_source(path)
+    if info is None:
+        return None, None
+    sid = register_stream(path)
+    return sid, info
+
+
+def register_loaded_media(m):
+    """把加载工程时已在线的一条 media 注册进全局 _media，使 /api/thumb?id=<mediaId>
+    能按 mediaId 找到源并生成缩略图（与 /api/pick、/api/upload 的 register_media 行为一致）。
+    m 需已含 id/streamId/path/duration 等 generate_thumb 所需字段。无 id 则跳过。"""
+    mid = m.get("id")
+    if not mid:
+        return
+    with _state_lock:
+        _media[mid] = dict(m)
+
+
+def load_project(pid):
+    """加载工程：读 json → 对每个 media 重探测+重登记 streamId → 拼 mediaStatus/warnings。
+    离线不阻塞。返回 dict（见契约 §2.3）；工程不存在返回 None。"""
+    pid = _safe_project_id(pid)
+    if not pid:
+        return None
+    obj = _read_project_json(pid)
+    if obj is None:
+        return None
+
+    warnings = []
+    try:
+        schema = int(obj.get("schema") or 0)
+    except (TypeError, ValueError):
+        schema = 0
+    if schema != PROJECT_SCHEMA:
+        warnings.append("工程文件版本与当前不一致（schema=%s），已尽量兼容加载。" % obj.get("schema"))
+
+    proj = obj.get("project") or {}
+    media_list = proj.get("media") or []
+    media_status = []
+    offline_names = []
+
+    for m in media_list:
+        if not isinstance(m, dict):
+            continue
+        mid = m.get("id")
+        name = m.get("name") or (os.path.basename(m.get("path") or "") or "素材")
+        path = m.get("path") or ""
+        # 旧保存值（用于离线回填 / changed 比较）
+        try:
+            saved_dur = float(m.get("duration")) if m.get("duration") not in (None, "", "N/A") else None
+        except (TypeError, ValueError):
+            saved_dur = None
+        saved_w = m.get("width")
+        saved_h = m.get("height")
+
+        sid, info = _probe_and_register(path)
+        if info is not None:
+            # 在线：就地更新 media 的 streamId/dims/duration/fps/hasAudio
+            m["streamId"] = sid
+            m["width"] = info["width"]
+            m["height"] = info["height"]
+            m["duration"] = info["duration"]
+            m["fps"] = info["fps"]
+            m["hasAudio"] = info["hasAudio"]
+            m["path"] = info["path"].replace("\\", "/")
+            if "thumbUrl" not in m and mid:
+                m["thumbUrl"] = "/api/thumb?id=%s" % mid
+            # 注册进全局 _media，使 /api/thumb?id=<mediaId> 能按 mediaId 取源生成缩略图
+            # （否则 get_media 返回 None → 404 → 占位图，素材库/时间轴缩略图全退化为灰底）
+            register_loaded_media(m)
+            # changed 判定：时长差异或分辨率变化
+            changed = False
+            if saved_dur is not None and abs(info["duration"] - saved_dur) > _DUR_EPS:
+                changed = True
+            if (saved_w not in (None,) and int(saved_w or 0) != info["width"]) or \
+               (saved_h not in (None,) and int(saved_h or 0) != info["height"]):
+                changed = True
+            if changed and saved_dur is not None:
+                warnings.append(
+                    "素材“%s”的时长已变化（%.2fs → %.2fs），相关片段已自动修正。"
+                    % (name, saved_dur, info["duration"]))
+            elif changed:
+                warnings.append("素材“%s”的属性已变化，相关片段已自动修正。" % name)
+            media_status.append({
+                "mediaId": mid,
+                "online": True,
+                "streamId": sid,
+                "path": m["path"],
+                "width": info["width"], "height": info["height"],
+                "duration": info["duration"], "fps": info["fps"],
+                "hasAudio": info["hasAudio"],
+                "changed": changed,
+            })
+        else:
+            # 离线：保留保存值，streamId=null
+            m["streamId"] = None
+            if "thumbUrl" not in m and mid:
+                m["thumbUrl"] = "/api/thumb?id=%s" % mid
+            offline_names.append(name)
+            media_status.append({
+                "mediaId": mid,
+                "online": False,
+                "streamId": None,
+                "path": (path or "").replace("\\", "/"),
+                "width": saved_w, "height": saved_h,
+                "duration": saved_dur, "fps": m.get("fps"),
+                "hasAudio": m.get("hasAudio"),
+                "changed": False,
+                "error": "文件不存在或无法解析",
+            })
+
+    if offline_names:
+        warnings.append("%d 个素材离线：%s。" % (len(offline_names), "、".join(offline_names)))
+
+    return {
+        "id": obj.get("id") or pid,
+        "name": obj.get("name") or "未命名工程",
+        "project": {
+            "output": proj.get("output") or {},
+            "media": media_list,
+            "tracks": proj.get("tracks") or [],
+        },
+        "mediaStatus": media_status,
+        "warnings": warnings,
+    }
+
+
+def relink_media(media_id, path):
+    """对 path 重探测+重登记，作为某离线素材的新源。
+    成功返回 {online:True, streamId, width,...}；失败 {online:False, error}。
+    注：进程级映射，不落盘（落盘靠用户后续 save）。media_id 仅用于错误文案。"""
+    name = os.path.basename(str(path or "")) or "素材"
+    sid, info = _probe_and_register(path)
+    if info is None:
+        return {"online": False, "error": "无法解析视频文件：%s" % name}
+    # 注册进全局 _media（同一 mediaId，新源），使重新链接后该素材的 /api/thumb 立即可用
+    if media_id:
+        register_loaded_media({
+            "id": media_id,
+            "streamId": sid,
+            "path": info["path"].replace("\\", "/"),
+            "width": info["width"],
+            "height": info["height"],
+            "duration": info["duration"],
+            "fps": info["fps"],
+            "hasAudio": info["hasAudio"],
+        })
+    return {
+        "online": True,
+        "streamId": sid,
+        "width": info["width"],
+        "height": info["height"],
+        "duration": info["duration"],
+        "fps": info["fps"],
+        "hasAudio": info["hasAudio"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # multipart/form-data 解析（极简，仅取首个 file 字段；纯标准库）
 # ---------------------------------------------------------------------------
 def _parse_multipart(rfile, content_type, content_length):
@@ -616,7 +1055,13 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            # 请求体非合法 UTF-8（编码错误或 keep-alive 体长错位）→ 当作非法 JSON，
+            # 由 do_POST 统一返回 400，而非未捕获的 500 traceback。
+            raise json.JSONDecodeError("请求体不是合法 UTF-8", "", 0)
+        return json.loads(text)
 
     def log_message(self, fmt, *args):
         msg = fmt % args
@@ -648,6 +1093,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_thumb(qs)
             elif path == "/api/export/status":
                 self._handle_export_status(qs)
+            elif path == "/api/projects":
+                self._handle_projects_list()
+            elif path == "/api/projects/load":
+                self._handle_projects_load(qs)
             elif path == "/api/fonts":
                 self._send_json({"fonts": list_fonts()})
             elif path == "/favicon.ico":
@@ -672,6 +1121,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_upload()
             elif path == "/api/export":
                 self._handle_export()
+            elif path == "/api/projects/save":
+                self._handle_projects_save()
+            elif path == "/api/projects/delete":
+                self._handle_projects_delete()
+            elif path == "/api/projects/rename":
+                self._handle_projects_rename()
+            elif path == "/api/relink":
+                self._handle_relink()
             else:
                 self._send_error_json(404, "未找到: %s" % path)
         except json.JSONDecodeError:
@@ -801,7 +1258,8 @@ class Handler(BaseHTTPRequestHandler):
             # 扩展名不在白名单也允许（ffprobe 再判），但补 .mp4 便于流式
             pass
 
-        dest = _dedup_path(UPLOAD_DIR, name)
+        # 拖入副本改存到持久素材库 media_store/（不再放临时目录，随工程长期保管）
+        dest = _dedup_path(MEDIA_STORE_DIR, name)
         try:
             with open(dest, "wb") as f:
                 f.write(file_bytes)
@@ -873,7 +1331,64 @@ class Handler(BaseHTTPRequestHandler):
             "outputPath": job.get("outputPath"),
             "error": job.get("error"),
             "log": job.get("log") or [],
+            "warnings": job.get("warnings") or [],
         })
+
+    # ---- /api/projects（列出工程，按 modifiedAt 倒序）----
+    def _handle_projects_list(self):
+        self._send_json({"projects": list_projects()})
+
+    # ---- /api/projects/load?id=（加载，离线不阻塞）----
+    def _handle_projects_load(self, qs):
+        pid = (qs.get("id") or [None])[0]
+        loaded = load_project(pid)
+        if loaded is None:
+            self._send_error_json(404, "工程不存在或无法读取")
+            return
+        self._send_json(loaded)
+
+    # ---- /api/projects/save（新建 / 覆盖 / 另存为）----
+    def _handle_projects_save(self):
+        body = self._read_json_body()
+        project = body.get("project")
+        if not isinstance(project, dict):
+            self._send_error_json(400, "缺少 project 数据")
+            return
+        result = save_project(body.get("id"), body.get("name"), project)
+        self._send_json(result)
+
+    # ---- /api/projects/delete ----
+    def _handle_projects_delete(self):
+        body = self._read_json_body()
+        pid = _safe_project_id(body.get("id"))
+        if not pid:
+            self._send_error_json(400, "非法工程 id")
+            return
+        ok = delete_project(pid)
+        self._send_json({"ok": bool(ok)})
+
+    # ---- /api/projects/rename ----
+    def _handle_projects_rename(self):
+        body = self._read_json_body()
+        pid = _safe_project_id(body.get("id"))
+        if not pid:
+            self._send_error_json(400, "非法工程 id")
+            return
+        modified = rename_project(pid, body.get("name"))
+        if modified is None:
+            self._send_error_json(404, "工程不存在")
+            return
+        self._send_json({"ok": True, "modifiedAt": modified})
+
+    # ---- /api/relink（重新链接离线素材；进程级映射，不落盘）----
+    def _handle_relink(self):
+        body = self._read_json_body()
+        media_id = body.get("mediaId")
+        path = body.get("path")
+        if not path:
+            self._send_error_json(400, "缺少 path")
+            return
+        self._send_json(relink_media(media_id, path))
 
     # ---- /api/stream（HTTP Range，沿用 v1）----
     def _handle_stream(self, qs):
@@ -1000,6 +1515,8 @@ def main():
         len(fonts), ", ".join(f["name"] for f in fonts) if fonts else "无"))
     print("  静态目录        : %s" % STATIC_DIR)
     print("  工作目录        : %s" % WORK_ROOT)
+    print("  工程库          : %s" % PROJECTS_DIR)
+    print("  持久素材库      : %s" % MEDIA_STORE_DIR)
     print("-" * 60)
     print("  浏览器将自动打开编辑界面；请保持本窗口开启。")
     print("  按 Ctrl+C 可停止服务。")

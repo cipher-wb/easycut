@@ -143,7 +143,16 @@
     export: function (proj, outputPath) { return postJson('/api/export', { project: proj, outputPath: outputPath }); },
     exportStatus: function (jobId) { return jsonFetch('/api/export/status?id=' + encodeURIComponent(jobId)); },
     streamUrl: function (streamId) { return '/api/stream?id=' + encodeURIComponent(streamId); },
-    thumbUrl: function (mediaId) { return '/api/thumb?id=' + encodeURIComponent(mediaId); }
+    thumbUrl: function (mediaId) { return '/api/thumb?id=' + encodeURIComponent(mediaId); },
+    // 工程系统（project_design.md §3.2）
+    projects: {
+      list: function () { return jsonFetch('/api/projects'); },
+      save: function (payload) { return postJson('/api/projects/save', payload); },
+      load: function (id) { return jsonFetch('/api/projects/load?id=' + encodeURIComponent(id)); },
+      del: function (id) { return postJson('/api/projects/delete', { id: id }); },
+      rename: function (id, name) { return postJson('/api/projects/rename', { id: id, name: name }); }
+    },
+    relink: function (mediaId, path) { return postJson('/api/relink', { mediaId: mediaId, path: path }); }
   };
 
   /* ===================================================================== *
@@ -365,12 +374,17 @@
     bus.emit('project:changed', { reason: reason });
     bus.emit('tracks:changed', {});
     bus.emit('selection:changed', selection || { kind: null });
+    // 撤销/重做亦视为结构变化 → 置脏（project_design.md §3.3 / §6.1）。
+    markDirty();
   }
 
   // 改状态后的统一收尾：重建派生 + emit。reason 仅供调试。
   function changed(reason) {
     rebuildTimeline();
     bus.emit('project:changed', { reason: reason });
+    // 结构性变化即脏（project_design.md §3.3 / §6.1）。loadProjectData/newProject
+    // 会显式调用 markSaved() 复位（其内部不经 changed()，避免被本行污染）。
+    markDirty();
   }
 
   /* ===================================================================== *
@@ -388,6 +402,7 @@
     if (getMedia(mediaObj.id)) return mediaObj.id;
     project.media.push(mediaObj);
     rebuildTimeline();
+    markDirty();   // 素材库属工程内容，导入后应可保存（project_design.md §6.1）
     bus.emit('media:changed', { added: [mediaObj.id] });
     return mediaObj.id;
   }
@@ -405,6 +420,7 @@
     if (idx < 0) return;
     project.media.splice(idx, 1);
     rebuildTimeline();
+    markDirty();   // 移除素材改变工程内容（project_design.md §6.1）
     bus.emit('media:changed', {});
   }
 
@@ -1179,16 +1195,24 @@
     if (hint) hint.style.display = 'none';
     project.media.forEach(function (m) {
       var item = document.createElement('div');
-      item.className = 'media-item';
+      item.className = 'media-item' + (m.offline ? ' offline' : '');
       item.dataset.mediaId = m.id;
       item.draggable = true;
 
       var img = document.createElement('img');
       img.className = 'mi-thumb';
-      img.src = m.thumbUrl || api.thumbUrl(m.id);
+      // 离线素材缩略图已失效，不请求（避免 404）；显示占位。
+      if (!m.offline) img.src = m.thumbUrl || api.thumbUrl(m.id);
       img.alt = m.name || '';
       img.draggable = false;
       item.appendChild(img);
+
+      if (m.offline) {
+        var ob = document.createElement('span');
+        ob.className = 'mi-offline-badge';
+        ob.textContent = '离线';
+        item.appendChild(ob);
+      }
 
       var info = document.createElement('div');
       info.className = 'mi-info';
@@ -1209,6 +1233,15 @@
       rm.className = 'mi-remove'; rm.title = '从库移除'; rm.textContent = '×';
       rm.addEventListener('click', function (ev) { ev.stopPropagation(); removeMedia(m.id); });
       item.appendChild(rm);
+
+      // 离线素材：「重新链接」按钮（project_design.md §5.5 .mi-relink）
+      if (m.offline) {
+        var rl = document.createElement('button');
+        rl.className = 'mi-relink'; rl.title = '重新链接到新位置'; rl.textContent = '重新链接';
+        rl.draggable = false;
+        rl.addEventListener('click', function (ev) { ev.stopPropagation(); relinkMedia(m.id); });
+        item.appendChild(rl);
+      }
 
       // 拖到时间轴（timeline_v2 §7 约定的 dataTransfer key）
       item.addEventListener('dragstart', function (ev) {
@@ -1629,6 +1662,242 @@
   }
 
   /* ===================================================================== *
+   * 29. 工程（项目）系统状态与 API（project_design.md §3.1 / §3.3 / §4）
+   *     - 元信息 _projectMeta + 脏标记 _dirty 为模块级唯一真值。
+   *     - serializeProject 剥离 transient(streamId/thumbUrl/offline)。
+   *     - loadProjectData/newProject 就地重填 project（引用恒定，§8 第2点）。
+   *     - 离线/changed/relink 的越界片段 clamp 走 _clampClipsForMedia。
+   * ===================================================================== */
+  var _projectMeta = { id: null, name: null };
+  var _dirty = false;
+
+  function getProjectMeta() { return { id: _projectMeta.id, name: _projectMeta.name }; }
+  function setProjectMeta(meta) {
+    meta = meta || {};
+    _projectMeta.id = (meta.id != null) ? meta.id : null;
+    _projectMeta.name = (meta.name != null) ? meta.name : null;
+    bus.emit('projectmeta:changed', { id: _projectMeta.id, name: _projectMeta.name });
+  }
+  function isDirty() { return !!_dirty; }
+  function markDirty() {
+    if (_dirty) return;
+    _dirty = true;
+    bus.emit('dirty:changed', { dirty: true });
+  }
+  function markSaved() {
+    if (!_dirty) { bus.emit('dirty:changed', { dirty: false }); return; }
+    _dirty = false;
+    bus.emit('dirty:changed', { dirty: false });
+  }
+
+  function hasOfflineMedia() {
+    for (var i = 0; i < project.media.length; i++) if (project.media[i].offline) return true;
+    return false;
+  }
+  function offlineCount() {
+    var n = 0;
+    for (var i = 0; i < project.media.length; i++) if (project.media[i].offline) n++;
+    return n;
+  }
+
+  // 可保存深拷贝：{output, media, tracks}；剥离 transient streamId/thumbUrl/offline。
+  // 不改内存状态（project_design.md §3.1）。
+  function serializeProject() {
+    var out = {};
+    var ko;
+    for (ko in project.output) if (project.output.hasOwnProperty(ko)) out[ko] = project.output[ko];
+    var media = project.media.map(function (m) {
+      return {
+        id: m.id,
+        path: m.path,
+        name: m.name,
+        width: m.width,
+        height: m.height,
+        duration: m.duration,
+        fps: m.fps,
+        hasAudio: m.hasAudio,
+        imported: m.imported || (/\/media_store\//i.test('' + (m.path || '')) ? 'upload' : 'pick')
+      };
+    });
+    var tracks = JSON.parse(JSON.stringify(project.tracks));
+    return { output: out, media: media, tracks: tracks };
+  }
+
+  // 把某 media 的越界视频 clips clamp 到 [0, newDuration]；丢弃整段越界(out<=in 或 in>=dur)。
+  // 返回 {clamped, dropped} 计数（调用方据此 toast）。
+  function _clampClipsForMedia(mediaId, newDuration) {
+    var clamped = 0, dropped = 0;
+    if (!(newDuration > 0)) newDuration = 0;
+    for (var ti = 0; ti < project.tracks.length; ti++) {
+      var t = project.tracks[ti];
+      if (t.kind !== 'video') continue;
+      var kept = [];
+      for (var ci = 0; ci < t.clips.length; ci++) {
+        var c = t.clips[ci];
+        if (c.mediaId !== mediaId) { kept.push(c); continue; }
+        // in 越界（整段都在新时长之外）或 clamp 后 out<=in → 丢弃。
+        if (c.in >= newDuration - 1e-6) { dropped++; continue; }
+        if (c.out > newDuration) { c.out = newDuration; clamped++; }
+        if (!(c.out > c.in)) { dropped++; continue; }
+        kept.push(c);
+      }
+      if (kept.length !== t.clips.length) t.clips = kept;
+    }
+    return { clamped: clamped, dropped: dropped };
+  }
+
+  // 加载工程：就地替换内存 project（引用恒定）+ 应用 mediaStatus + clamp + 重建 + markSaved。
+  // loaded = { id, name, project:{output,media,tracks}, mediaStatus:[...], warnings:[...] }
+  function loadProjectData(loaded) {
+    loaded = loaded || {};
+    var lp = loaded.project || {};
+    var lout = lp.output || {};
+    var lmedia = lp.media || [];
+    var ltracks = lp.tracks || [];
+
+    // 1) output 逐字段写回（保留对象引用）。
+    var o = project.output, ko;
+    for (ko in lout) if (lout.hasOwnProperty(ko)) o[ko] = lout[ko];
+
+    // 2) media / tracks 清空重填（保持数组引用，§8 第2点）。
+    project.media.length = 0;
+    lmedia.forEach(function (m) {
+      if (m && m.path) m.path = ('' + m.path).replace(/\\/g, '/');
+      project.media.push(m);
+    });
+    project.tracks.length = 0;
+    ltracks.forEach(function (t) { project.tracks.push(t); });
+
+    // 3) 应用 mediaStatus（权威）：offline/streamId/dims/duration/fps/hasAudio + thumbUrl 重建。
+    var statusById = {};
+    (loaded.mediaStatus || []).forEach(function (s) { if (s && s.mediaId != null) statusById[s.mediaId] = s; });
+    var clampMsgs = [];
+    project.media.forEach(function (m) {
+      var s = statusById[m.id];
+      if (s) {
+        m.offline = !s.online;
+        m.streamId = s.online ? s.streamId : null;
+        if (s.online) {
+          if (s.width != null) m.width = s.width;
+          if (s.height != null) m.height = s.height;
+          if (s.duration != null) m.duration = s.duration;
+          if (s.fps != null) m.fps = s.fps;
+          if (s.hasAudio != null) m.hasAudio = s.hasAudio;
+          if (s.path) m.path = ('' + s.path).replace(/\\/g, '/');
+          // changed 且新时长变短 → clamp 越界片段。
+          if (s.changed && s.duration != null) {
+            var r = _clampClipsForMedia(m.id, s.duration);
+            if (r.clamped || r.dropped) clampMsgs.push('素材“' + (m.name || m.id) + '”时长变化，已修正 ' + r.clamped + ' 个片段' + (r.dropped ? '，移除 ' + r.dropped + ' 个越界片段' : '') + '。');
+          }
+        }
+      } else {
+        // 无 status：保守视为离线、清 streamId。
+        m.offline = true;
+        m.streamId = null;
+      }
+      m.thumbUrl = api.thumbUrl(m.id);  // 按 mediaId 重建（streamId 失效不影响缩略图按 mediaId 现取）。
+    });
+
+    // 4) id 计数器同步，避免新生成 id 与加载进来的撞号（§8 第2点）。
+    project.media.forEach(function (m) { bumpIdCounter('med', m.id); bumpIdCounter('src', m.streamId); });
+    project.tracks.forEach(function (t) {
+      bumpIdCounter('trk', t.id);
+      (t.clips || []).forEach(function (c) {
+        if (t.kind === 'text') bumpIdCounter('txt', c.id); else bumpIdCounter('clip', c.id);
+      });
+    });
+
+    // 5) 清空 undo/redo（加载是全新基线，不可撤销回前一工程）。
+    undoStack.length = 0; redoStack.length = 0;
+
+    // 6) 元信息 + 脏标记复位。
+    setProjectMeta({ id: loaded.id != null ? loaded.id : null, name: loaded.name != null ? loaded.name : null });
+    selection = null;
+
+    // 7) 重建派生 + 全量重渲事件。
+    rebuildTimeline();
+    refreshUndoRedoButtons();
+    bus.emit('project:changed', { reason: 'loadProject' });
+    bus.emit('tracks:changed', {});
+    bus.emit('media:changed', {});
+    bus.emit('selection:changed', { kind: null });
+    bus.emit('output:changed', {});
+    bus.emit('project:loaded', { id: _projectMeta.id, name: _projectMeta.name });
+
+    markSaved();   // 加载后非脏
+
+    // 8) toast 后端 warnings + 本地 clamp 提示。
+    (loaded.warnings || []).forEach(function (w) { if (w) toast(w, 'warn', 4000); });
+    clampMsgs.forEach(function (w) { toast(w, 'warn', 4000); });
+  }
+
+  // 新建空白工程：复位 output 默认 + 清 media + 默认 2 视频轨（引用恒定）。
+  function newProject() {
+    // output 复位默认（逐字段写回保留引用）。
+    var defOut = { width: 1920, height: 1080, fps: 30, crf: 18, keepAudio: true };
+    var o = project.output, ko;
+    for (ko in defOut) if (defOut.hasOwnProperty(ko)) o[ko] = defOut[ko];
+    _outputUserTouched = false;
+
+    project.media.length = 0;
+    project.tracks.length = 0;
+    initDefaultTracks();   // 复用默认 2 条视频轨逻辑（保持 tracks 数组引用）
+
+    undoStack.length = 0; redoStack.length = 0;
+    selection = null;
+    setProjectMeta({ id: null, name: null });
+
+    rebuildTimeline();
+    refreshUndoRedoButtons();
+    bus.emit('project:changed', { reason: 'newProject' });
+    bus.emit('tracks:changed', {});
+    bus.emit('media:changed', {});
+    bus.emit('selection:changed', { kind: null });
+    bus.emit('output:changed', {});
+    bus.emit('project:loaded', { id: null, name: null });
+
+    markSaved();
+  }
+
+  // 重新链接离线素材：pick 单选 → /api/relink → 回写 media + clamp 变短片段 + 刷新 + markDirty。
+  function relinkMedia(mediaId) {
+    var media = getMedia(mediaId);
+    if (!media) { toast('素材不存在', 'error'); return Promise.resolve(); }
+    return api.pick(false).then(function (res) {
+      var arr = (res && res.media) || [];
+      // /api/pick 单选返回 media[0]，取其 path；用户取消 → 无 media。
+      var path = (arr[0] && arr[0].path) || (res && res.path) || null;
+      if (!path) return; // 取消，无操作
+      return api.relink(mediaId, path).then(function (r) {
+        r = r || {};
+        if (!r.online) { toast('重新链接失败：' + (r.error || '无法解析该文件'), 'error', 4000); return; }
+        media.path = ('' + path).replace(/\\/g, '/');
+        media.streamId = r.streamId || null;
+        if (r.width != null) media.width = r.width;
+        if (r.height != null) media.height = r.height;
+        if (r.fps != null) media.fps = r.fps;
+        if (r.hasAudio != null) media.hasAudio = r.hasAudio;
+        media.offline = false;
+        media.thumbUrl = api.thumbUrl(mediaId);
+        var msg = '已重新链接：' + (media.name || mediaId);
+        if (r.duration != null) {
+          if (r.duration < media.duration - 1e-6) {
+            var rr = _clampClipsForMedia(mediaId, r.duration);
+            if (rr.clamped || rr.dropped) msg += '；新文件较短，已修正 ' + rr.clamped + ' 个片段' + (rr.dropped ? '、移除 ' + rr.dropped + ' 个' : '');
+          }
+          media.duration = r.duration;
+        }
+        markDirty();   // 提示用户保存以固化新 path
+        rebuildTimeline();
+        bus.emit('media:changed', {});
+        bus.emit('project:changed', { reason: 'relink' });
+        bus.emit('clips:changed', {});
+        toast(msg, 'info', 2600);
+      });
+    }).catch(function (e) { toast('重新链接失败：' + (e && e.message ? e.message : e), 'error', 4000); });
+  }
+
+  /* ===================================================================== *
    * 27. 暴露 window.App（contract_v2 §3.2 全部方法）
    * ===================================================================== */
   var App = {
@@ -1675,6 +1944,19 @@
 
     // 导出
     buildExportProject: buildExportProject,
+
+    // 工程（项目）系统（project_design.md §3.1）
+    serializeProject: serializeProject,
+    loadProjectData: loadProjectData,
+    newProject: newProject,
+    getProjectMeta: getProjectMeta,
+    setProjectMeta: setProjectMeta,
+    isDirty: isDirty,
+    markDirty: markDirty,
+    markSaved: markSaved,
+    relinkMedia: relinkMedia,
+    hasOfflineMedia: hasOfflineMedia,
+    offlineCount: offlineCount,
 
     // 引擎 / 文字层 / 工具
     engine: null,

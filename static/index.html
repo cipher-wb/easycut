@@ -12,6 +12,12 @@
     <div class="tb-group">
       <span class="tb-brand">轻剪</span>
     </div>
+    <div class="tb-group tb-project">
+      <button id="btnProjects" type="button" title="工程：新建 / 打开最近工程">🗂 工程</button>
+      <button id="btnSaveProject" type="button" title="保存工程 (Ctrl+S)；另存为 (Ctrl+Shift+S)">💾 保存</button>
+      <span id="lblProjectName" class="proj-name is-unnamed" title="未命名工程"><span class="pn-text">未命名工程</span></span>
+    </div>
+    <div class="tb-sep"></div>
     <div class="tb-group">
       <button id="btnImport" type="button" title="导入 mp4（系统对话框，零拷贝，入素材库）">＋ 导入 mp4</button>
       <button id="btnAddText" type="button" title="在当前/新文字轨于播放头添加一条文字">Ａ 添加文字</button>
@@ -44,8 +50,16 @@
       <button id="btnShortcuts" type="button" title="查看全部快捷键 (F1 或 ?)">⌨ 快捷键</button>
     </div>
     <div class="tb-group">
-      <button id="btnExport" type="button" disabled class="primary" title="导出为新的 mp4 文件 (Ctrl+S)">⬇ 导出</button>
+      <button id="btnExport" type="button" disabled class="primary" title="导出为新的 mp4 文件 (Ctrl+E)">⬇ 导出</button>
     </div>
+  </div>
+
+  <!-- ============ 离线素材横幅 #offlineBanner（默认隐藏） ============ -->
+  <div id="offlineBanner" hidden>
+    <span class="ob-icon">⚠</span>
+    <span id="offlineBannerText" class="ob-text">素材离线</span>
+    <button id="btnRelinkAll" type="button" class="ob-btn">全部重新链接</button>
+    <button id="offlineBannerClose" type="button" class="ob-close" title="关闭横幅（不影响离线状态）">✕</button>
   </div>
 
   <!-- ============ 主体三栏：素材库 + 预览 + 属性面板 ============ -->
@@ -401,6 +415,40 @@
     </form>
   </dialog>
 
+  <!-- ============ 工程选择面板 #projectDialog ============ -->
+  <dialog id="projectDialog">
+    <div class="proj-box">
+      <div class="proj-head">
+        <span class="proj-title">🗂 工程</span>
+        <button type="button" id="projectDialogClose" class="proj-close" title="关闭面板">关闭</button>
+      </div>
+      <div class="proj-body">
+        <button type="button" id="btnNewProject" class="proj-new primary">＋ 新建工程</button>
+        <div class="proj-list-title">最近工程</div>
+        <div id="projectList" class="proj-list">
+          <!-- .project-item（动态）：data-project-id
+               └ .pi-main(.pi-name/.pi-time) / .pi-actions(.pi-open/.pi-rename/.pi-delete) -->
+        </div>
+        <div id="projectEmptyHint" class="proj-empty" hidden>暂无工程，点击上方「＋ 新建工程」开始。</div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ============ 保存命名 / 另存为对话框 #saveNameDialog ============ -->
+  <dialog id="saveNameDialog">
+    <div class="savename-box">
+      <h3>保存工程</h3>
+      <label class="field">
+        <span>工程名称</span>
+        <input type="text" id="inpSaveName" placeholder="输入工程名称…" maxlength="80" />
+      </label>
+      <div class="savename-actions">
+        <button type="button" id="btnSaveNameOk" class="primary">保存</button>
+        <button type="button" id="btnSaveNameCancel">取消</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- ============ 拖拽导入遮罩 #dropOverlay ============ -->
   <div id="dropOverlay" hidden>
     <div class="do-inner">
@@ -419,6 +467,8 @@
   <script src="/static/timeline.js"></script>
   <script src="/static/overlay.js"></script>
   <script src="/static/shortcuts.js"></script>
+  <!-- 工程系统 UI：依赖 App（在 app.js 之后） -->
+  <script src="/static/projects.js"></script>
   <script src="/static/export.js"></script>
 </body>
 </html>

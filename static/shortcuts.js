@@ -117,6 +117,9 @@
     bus.emit('export:open', {});
     var b = document.getElementById('btnExport'); if (b && !b.disabled) { /* export.js 也监听 export:open */ }
   }
+  // 工程系统：保存 / 另存为经 bus 解耦（projects.js 监听 project:save / project:saveAs）。
+  function saveProject() { bus.emit('project:save', {}); }
+  function saveAsProject() { bus.emit('project:saveAs', {}); }
   function zoomIn() { bus.emit('tl:zoom', +1); }
   function zoomOut() { bus.emit('tl:zoom', -1); }
 
@@ -144,9 +147,13 @@
       ['Ctrl + Z', '撤销'],
       ['Ctrl + Shift + Z / Ctrl + Y', '重做'],
     ] },
+    { title: '工程', items: [
+      ['Ctrl + S', '保存工程'],
+      ['Ctrl + Shift + S', '另存为'],
+      ['Ctrl + E', '导出'],
+    ] },
     { title: '视图 / 其它', items: [
       ['+ / -', '放大 / 缩小时间轴'],
-      ['Ctrl + S', '打开导出'],
       ['F1 / ?', '显示本快捷键说明'],
     ] },
   ];
@@ -216,7 +223,9 @@
     'home'            : function (e) { e.preventDefault(); seek(0); },
     'end'             : function (e) { e.preventDefault(); seek(totalDuration()); },
 
-    'ctrl+s'          : function (e) { e.preventDefault(); openExport(); },
+    'ctrl+s'          : function (e) { e.preventDefault(); saveProject(); },     // 保存工程（原导出已改 Ctrl+E）
+    'ctrl+shift+s'    : function (e) { e.preventDefault(); saveAsProject(); },    // 另存为（与 redo 的 ctrl+shift+z 按 key 区分，不冲突）
+    'ctrl+e'          : function (e) { e.preventDefault(); openExport(); },       // 导出（原 Ctrl+S 的功能迁移至此）
     'escape'          : function () { clearSelection(); },
     'ctrl+a'          : function (e) { /* 全选当前轨片段（可选，未实现）*/ },
 
@@ -252,7 +261,7 @@
   }
 
   // 输入框聚焦时仍放行的全局键（contract §7：仅撤销/重做/Esc）
-  var ALLOW_WHILE_TYPING = { 'ctrl+z': 1, 'ctrl+shift+z': 1, 'ctrl+y': 1, 'escape': 1 };
+  var ALLOW_WHILE_TYPING = { 'ctrl+z': 1, 'ctrl+shift+z': 1, 'ctrl+y': 1, 'escape': 1, 'ctrl+s': 1, 'ctrl+shift+s': 1 };
 
   document.addEventListener('keydown', function (e) {
     var combo = normalize(e);
