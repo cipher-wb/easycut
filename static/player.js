@@ -53,6 +53,17 @@
   }
   App.pipRect = pipRect;
 
+  /* ---------- 变速: 设 playbackRate + 保持音调(含前缀回退) ---------- */
+  // speed_design.md §3.1: 变速预览用 playbackRate, 音频不变调用 preservesPitch。
+  function applyRate(v, speed) {
+    var r = (speed == null ? 1 : speed);
+    if (!(r > 0)) r = 1;
+    if (v.playbackRate !== r) { try { v.playbackRate = r; } catch (e) {} }
+    if ('preservesPitch' in v) v.preservesPitch = true;
+    if ('mozPreservesPitch' in v) v.mozPreservesPitch = true;
+    if ('webkitPreservesPitch' in v) v.webkitPreservesPitch = true;
+  }
+
   /* =====================================================================
    * letterbox 画布布局 #canvasBox (复用 v1 layoutVideoBox, 改 id)
    * ===================================================================== */
@@ -170,7 +181,8 @@
           var clip = clips[ci];
           var m = mediaById.get(clip.mediaId);
           if (!m) continue;                         // 源缺失: 跳过
-          var dur = clip.out - clip.in;
+          // 公式 A: 视频片段时间轴长度 = (out-in)/speed (speed 默认 1, 钳制由 mutator/导出负责)
+          var dur = (clip.out - clip.in) / (clip.speed || 1);
           if (!(dur > 0)) continue;                 // 非法区间: 跳过
           var tStart = clip.start, tEnd = clip.start + dur;
           segs.push({ clip: clip, media: m, tStart: tStart, tEnd: tEnd });
@@ -428,18 +440,23 @@
 
       if (!seg) { p.clearMedia(); continue; }            // 间隙/隐藏 → 透明
 
-      var want = seg.clip.in + (t - seg.clip.start);     // 期望源时刻
+      var spd = (seg.clip.speed || 1);                   // 变速倍率(默认 1)
+      // 公式 B: 期望源时刻 = in + (t - start) * speed (video 以 playbackRate 自行前进, 此为源秒域)
+      var want = seg.clip.in + (t - seg.clip.start) * spd;
       var clipChanged = (p.curClipId !== seg.clip.id);
       var mediaChanged = (p.curMediaId !== seg.media.id);
 
       if (mediaChanged || clipChanged) {                 // 片段边界: 换源或同源 seek
         p.curClipId = seg.clip.id;
         p.setMedia(seg.media, want, this.playing);
+        applyRate(p.v, spd);                             // 换源后浏览器会复位 rate, 故每次都设
         p.v.style.display = '';
       } else if (!p.switching) {                          // 同片段播放中
+        applyRate(p.v, spd);                             // 同源持续保证 rate/保音调不被复位
         if (forceReseek) {
           p._wantPlay = this.playing; p.switching = true; p._safeSeek(want);
         } else {
+          // 漂移判定在源秒域: want 已含 speed, currentTime 本就是源秒, 同域直接比较
           var have = p.v.currentTime;
           if (Math.abs(have - want) > this.DRIFT) {       // 漂移过大 → 纠正(否则放任防抖)
             p._wantPlay = this.playing; p._safeSeek(want);
@@ -448,6 +465,7 @@
         }
         p.v.style.display = '';
       } else {
+        applyRate(p.v, spd);                             // switching 中也设, 保证 seeked 后即正确
         p.v.style.display = '';                            // switching 中: 保持上一帧
       }
     }

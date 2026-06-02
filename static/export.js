@@ -330,7 +330,7 @@
         var c = clips[j];
         var dur = (t.kind === 'text')
           ? (c.duration || 0)
-          : ((c.out || 0) - (c.in || 0));
+          : (((c.out || 0) - (c.in || 0)) / (c.speed || 1));
         var end = (c.start || 0) + dur;
         if (dur > 0 && end > total) total = end;
       }

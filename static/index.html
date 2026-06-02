@@ -129,6 +129,15 @@
           <input type="range" id="rngClipOpacity" min="0" max="1" step="0.01" />
         </label>
 
+        <label class="field">
+          <span>倍率（变速，0.25× – 4×）</span>
+          <div class="row">
+            <input type="range" id="rngSpeed" min="0.25" max="4" step="0.05" />
+            <input type="number" id="propSpeed" min="0.25" max="4" step="0.05" class="num-sm" title="倍率 ×" />
+            <span class="unit">×</span>
+          </div>
+        </label>
+
         <div class="row btn-row">
           <button type="button" id="btnClipContain" class="mini">适应</button>
           <button type="button" id="btnClipCover" class="mini">填充</button>

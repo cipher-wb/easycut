@@ -429,6 +429,7 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 4px;
   z-index: 6;
 }
 .clip.dragging, .text-clip.dragging { opacity: .65; cursor: grabbing; z-index: 7; }
+.clip.speeding { outline: 1px dashed var(--accent); outline-offset: -2px; cursor: ew-resize; z-index: 7; }
 
 .clip-label, .tc-label {
   font-size: 11px; color: #eef3ff;

@@ -119,7 +119,18 @@
   function clipDur(clip, track) {
     if (track && track.kind === 'text') return clip.duration || 0;
     if (clip.duration != null && clip.out == null) return clip.duration; // 文字片段
-    return (clip.out || 0) - (clip.in || 0);
+    // 公式 A（speed_design.md §0）：视频时间轴长度 = (out - in) / speed
+    return ((clip.out || 0) - (clip.in || 0)) / (clip.speed || 1);
+  }
+
+  // doSpeedTrim 需后段左缘作上界（app.js 有 nextClipStart，本模块无，新增本地 helper）
+  function nextClipStart(track, clip) {
+    var myEnd = clip.start + clipDur(clip, track), best = null;
+    track.clips.forEach(function (c) {
+      if (c === clip) return;
+      if (c.start >= myEnd - 1e-6) { if (best == null || c.start < best) best = c.start; }
+    });
+    return best;
   }
 
   /* ---------- 选中态读取（容错 contract getSelection 与 v1 selectedClipId） ---------- */
@@ -376,7 +387,7 @@
       mode: trimSide ? ('trim-' + trimSide) : 'move',
       clip: clip, track: track, el: clipEl,
       startX: e.clientX,
-      orig: { start: clip.start, in: clip.in, out: clip.out, duration: clip.duration },
+      orig: { start: clip.start, in: clip.in, out: clip.out, duration: clip.duration, speed: clip.speed },
       targetTrack: track,
       pending: null,
       moved: false
@@ -393,8 +404,48 @@
     var dxSec = xToTime(e.clientX - drag.startX);
     if (Math.abs(e.clientX - drag.startX) > 2) drag.moved = true;
     var snapOff = e.altKey; // 实时读 Alt：拖动中可临时关吸附
+    // Shift + 拖【右边缘】且片段为视频 → 变速（speed_design.md §2.1）。
+    // 一旦判为变速，后续 move 持续走 speedTrim（不因中途松开 Shift 切回裁剪，避免抖动）。
+    if (drag.mode === 'speed' ||
+        (drag.mode === 'trim-right' && e.shiftKey && drag.track && drag.track.kind === 'video')) {
+      drag.mode = 'speed';
+      doSpeedTrim(e, dxSec, snapOff);
+      return;
+    }
     if (drag.mode === 'move') doMove(e, dxSec, snapOff);
     else doTrim(e, dxSec, snapOff, drag.mode === 'trim-left');
+  }
+
+  /* 变速拖拽（Shift + 右缘，in/out 固定，只改 speed）—— 仅视觉更新，松手才落数据。
+   * 公式 A：tlLen = (out-in)/speed；speed∈[0.25,4] ⇒ tlLen∈[(out-in)/4,(out-in)/0.25]。
+   * 由指针求 desiredTlLen（带磁吸、不与后段重叠、≥MIN），钳制后 speed=(out-in)/tlLen。 */
+  function doSpeedTrim(e, dxSec, snapOff) {
+    var o = drag.orig, track = drag.track;
+    var srcLen = (o.out || 0) - (o.in || 0);            // 源长度恒定
+    var MIN = minClipLen();
+    var curTlLen = srcLen / (o.speed || 1);             // 拖前的时间轴长度
+    var desiredEnd = o.start + curTlLen + dxSec;        // 右缘随指针
+    // 磁吸右缘（只吸被拖的那条边缘）
+    if (!snapOff) { var s = snapEdge(desiredEnd, drag.clip.id); if (s.hit && s.value > o.start + MIN) desiredEnd = s.value; }
+    else hideSnapGuide();
+    var tlLen = desiredEnd - o.start;
+    // 不与后一片段重叠：tlLen 上界 = nextStart - start（无后段则 Infinity）
+    var nextStart = nextClipStart(track, drag.clip);
+    var maxByNeighbor = (nextStart != null) ? (nextStart - o.start) : Infinity;
+    // speed∈[0.25,4] ⇒ tlLen∈[srcLen/4, srcLen/0.25]，并 ≥MIN，并 ≤maxByNeighbor
+    var tlMin = Math.max(MIN, srcLen / 4);
+    var tlMax = Math.min(srcLen / 0.25, maxByNeighbor);
+    if (tlMax < tlMin) tlMax = tlMin;                   // 后段太近时退化为最小，防 clamp 反转
+    tlLen = clamp(tlLen, tlMin, tlMax);
+    var speed = clamp(srcLen / tlLen, 0.25, 4);
+    drag.pending = { speed: speed, tlLen: srcLen / speed };
+    // 视觉：left 不变（右缘伸缩），宽度按变速后 tlLen
+    drag.el.style.left = timeToX(o.start) + 'px';
+    drag.el.style.width = Math.max(MIN_PX, timeToX(srcLen / speed)) + 'px';
+    // 倍率提示（可选）：在片段时长角标上显示当前倍率
+    var durEl = drag.el.querySelector('.clip-label-dur');
+    if (durEl) durEl.textContent = speed.toFixed(2) + '×';
+    drag.el.title = '变速 ' + speed.toFixed(2) + '×';
   }
 
   function onLanePointerUp() {
@@ -464,23 +515,26 @@
 
     // 视频片段
     if (isLeft) {
-      // 左缘随鼠标：start' = start + d, in' = in + d（保持右缘 out 不变）
-      // 边界：in' >= 0 -> d >= -in；dur' = out - in' >= MIN -> d <= (out-in)-MIN
-      var d = dxSec;
-      var lo = -o.in, hi = (o.out - o.in) - MIN;
-      d = clamp(d, lo, hi);
-      var newStart = o.start + d;
-      if (!snapOff) { var sl = snapEdge(newStart, drag.clip.id); if (sl.hit) { var dd = sl.value - newStart; d += dd; d = clamp(d, lo, hi); newStart = o.start + d; } }
-      drag.pending = { start: Math.max(0, newStart), in: o.in + d, out: o.out };
+      // 左缘随鼠标(时间轴增量 dTl)：start' = start + dTl；源 in' = in + dTl*sp（保持右缘 out 不变）
+      // 时间轴长 = (out-in)/sp；边界：in'>=0、start'>=0、时间轴长'>=MIN
+      var sp = (o.speed || 1);
+      var oldTl = (o.out - o.in) / sp;
+      var dTl = dxSec;
+      var lo = Math.max(-o.in / sp, -o.start), hi = oldTl - MIN;
+      dTl = clamp(dTl, lo, hi);
+      var newStart = o.start + dTl;
+      if (!snapOff) { var sl = snapEdge(newStart, drag.clip.id); if (sl.hit) { dTl = clamp(sl.value - o.start, lo, hi); newStart = o.start + dTl; } }
+      drag.pending = { start: Math.max(0, newStart), in: o.in + dTl * sp, out: o.out };
     } else {
-      // 右缘：out' = out + d；dur'>=MIN, out'<=media.duration
-      var d2 = dxSec;
+      // 右缘(时间轴增量 dxSec)：源 out' = out + dxSec*sp；时间轴长 = (out'-in)/sp
+      var spR = (o.speed || 1);
+      var d2 = dxSec * spR;
       var maxDur = media ? media.duration : Infinity;
-      var hiR = maxDur - o.out;
-      var loR = MIN - (o.out - o.in);
+      var hiR = maxDur - o.out;                       // out 不超素材时长
+      var loR = MIN * spR - (o.out - o.in);           // 时间轴长 >= MIN
       d2 = clamp(d2, loR, hiR);
-      var endTime = o.start + (o.out - o.in) + d2;
-      if (!snapOff) { var sr = snapEdge(endTime, drag.clip.id); if (sr.hit) { var de = sr.value - endTime; d2 = clamp(d2 + de, loR, hiR); } }
+      var endTime = o.start + (o.out - o.in + d2) / spR;
+      if (!snapOff) { var sr = snapEdge(endTime, drag.clip.id); if (sr.hit) { d2 = clamp((sr.value - o.start) * spR - (o.out - o.in), loR, hiR); } }
       drag.pending = { start: o.start, in: o.in, out: o.out + d2 };
     }
     applyTrimVisual(track);
@@ -488,7 +542,8 @@
 
   function applyTrimVisual(track) {
     var p = drag.pending;
-    var dur = (track.kind === 'text') ? p.duration : (p.out - p.in);
+    var sp = (drag.orig && drag.orig.speed) || 1;   // 变速：时间轴长 = 源长/sp
+    var dur = (track.kind === 'text') ? p.duration : ((p.out - p.in) / sp);
     drag.el.style.left = timeToX(p.start) + 'px';
     drag.el.style.width = Math.max(MIN_PX, timeToX(dur)) + 'px';
   }
@@ -514,6 +569,11 @@
       // contract §3.2: App.moveClip(trackId, clipId, newStartSec, newTrackId?, opts)
       var newTrackId = (d.targetTrack.id !== d.track.id) ? d.targetTrack.id : undefined;
       App.moveClip(d.track.id, d.clip.id, resolved, newTrackId, { noHistory: true });
+    } else if (d.mode === 'speed') {
+      // 变速：in/out 不变，只改 speed。一次手势一次撤销步（mutator 传 noHistory）。
+      App.pushHistory();
+      App.setClipSpeed(d.track.id, d.clip.id, d.pending.speed, { noHistory: true });
+      // mutator emit clips:changed -> renderAll，恢复角标/宽度为真实值
     } else if (d.mode === 'trim-left') {
       App.pushHistory();
       // contract §3.2: App.trimClip(trackId, clipId, edge, deltaSec, opts)；in 边

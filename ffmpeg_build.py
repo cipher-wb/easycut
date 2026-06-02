@@ -86,6 +86,34 @@ def _fmt_num(v):
     return s if s else "0"
 
 
+def atempo_chain(speed):
+    """返回 atempo 因子列表；乘积 == clamp 后的 speed，每个因子 ∈ [0.5, 2.0]。
+    （见 _build/speed_ffmpeg.md §3.3，本机实测 7 个倍率 product 全 == speed。）
+    speed>2 反复除以 2、speed<0.5 反复除以 0.5，各得一个 2.0/0.5 因子，余数作末级。
+    -> 0.25:[0.5,0.5] 0.5:[0.5] 1.0:[1.0] 1.5:[1.5] 2.0:[2.0] 3.0:[2.0,1.5] 4.0:[2.0,2.0]
+    """
+    speed = _clampf(speed, 0.25, 4.0)               # 钳制到 [0.25,4]
+    factors = []
+    s = speed
+    while s > 2.0 + 1e-9:                            # 快放超 2 -> 拆 2.0
+        factors.append(2.0)
+        s /= 2.0
+    while s < 0.5 - 1e-9:                            # 慢放低于 0.5 -> 拆 0.5
+        factors.append(0.5)
+        s /= 0.5
+    factors.append(round(s, 6))                      # 余数（必在 [0.5,2]）
+    return factors
+
+
+def atempo_filter_str(speed):
+    """拼成 atempo 滤镜串；speed==1 返回空串（整段不加 atempo，省一次重采样/相位处理）。
+    speed=4 -> "atempo=2,atempo=2"; speed=0.25 -> "atempo=0.5,atempo=0.5"; speed=3 -> "atempo=2,atempo=1.5"
+    """
+    if abs(_clampf(speed, 0.25, 4.0) - 1.0) < 1e-9:
+        return ""
+    return ",".join("atempo=%s" % _fmt_num(f) for f in atempo_chain(speed))
+
+
 def _to_even(n, minimum=2):
     """向下取偶（libx264 + yuv420p 要求宽高偶数），最小 minimum。"""
     n = int(round(float(n)))
@@ -346,8 +374,10 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
             start = 0.0
         if start < 0:
             start = 0.0
-        dur = cout - cin
-        end = start + dur
+        # 变速：tlLen = (out-in)/speed（公式 A）；end / totalDuration 全用 tlLen 累加（贯穿点）。
+        speed = _clampf(clip.get("speed", 1.0), 0.25, 4.0)
+        tl_len = (cout - cin) / speed
+        end = start + tl_len
         if end > total_duration:
             total_duration = end
 
@@ -360,6 +390,7 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
             "mediaId": media.get("id"),
             "hasAudio": bool(media.get("hasAudio", False)),
             "in": cin, "out": cout, "start": start, "end": end,
+            "speed": speed, "tlLen": tl_len,
             "clipW": clip_w, "clipH": clip_h, "x": x, "y": y,
             "opacity": opacity,
             "trackIdx": ti, "clipIdx": ci,
@@ -437,7 +468,7 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
             audio_clips.append({
                 "streamIdx": v["streamIdx"],
                 "in": v["in"], "out": v["out"], "start": v["start"],
-                "volume": v["trackVolume"],
+                "volume": v["trackVolume"], "speed": v["speed"],
             })
 
     return {
@@ -470,12 +501,19 @@ def _build_video_chains(norm):
     n = 0
     for v in norm["video_clips"]:
         vlab = "v_%d_%d" % (v["trackIdx"], v["clipIdx"])
+        # 变速：speed≠1 时 setpts=(PTS-STARTPTS)/speed+start/TB（源 out-in 拉伸/压缩为 tlLen 再平移）；
+        # speed==1 退回 v2 原写法（零回归）。overlay enable 的 end 已按 tlLen 算好，无需改。
+        speed = v.get("speed", 1.0)
+        if abs(speed - 1.0) < 1e-9:
+            setpts = "setpts=PTS-STARTPTS+%s/TB" % _fmt_num(v["start"])
+        else:
+            setpts = "setpts=(PTS-STARTPTS)/%s+%s/TB" % (_fmt_num(speed), _fmt_num(v["start"]))
         chain = (
             "[%d:v]trim=start=%s:end=%s,"
-            "setpts=PTS-STARTPTS+%s/TB,"
+            "%s,"
             "scale=%d:%d,setsar=1"
             % (v["streamIdx"], _fmt_num(v["in"]), _fmt_num(v["out"]),
-               _fmt_num(v["start"]), v["clipW"], v["clipH"])
+               setpts, v["clipW"], v["clipH"])
         )
         if v["opacity"] < 1.0:
             chain += ",format=yuva420p,colorchannelmixer=aa=%s" % _fmt_num(v["opacity"])
@@ -580,12 +618,17 @@ def _build_audio_chains(norm):
     for j, a in enumerate(norm["audio_clips"]):
         alab = "a%d" % j
         ms = int(round(a["start"] * 1000))
+        # 变速保音调：atempo 串联（总因子=speed），插在 asetpts(归零) 之后、aresample 之前；
+        # speed==1 返回空串，整段不加 atempo（零回归）。adelay(平移) 仍用 start*1000，不被缩放。
+        atempo = atempo_filter_str(a.get("speed", 1.0))
+        atempo_part = (atempo + ",") if atempo else ""
         lines.append(
             "[%d:a]atrim=start=%s:end=%s,asetpts=PTS-STARTPTS,"
+            "%s"
             "aresample=%d,aformat=channel_layouts=stereo,"
             "volume=%s,adelay=%d|%d[%s]"
             % (a["streamIdx"], _fmt_num(a["in"]), _fmt_num(a["out"]),
-               AUDIO_SR, _fmt_num(a["volume"]), ms, ms, alab)
+               atempo_part, AUDIO_SR, _fmt_num(a["volume"]), ms, ms, alab)
         )
         alabs.append(alab)
 

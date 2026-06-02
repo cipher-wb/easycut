@@ -201,7 +201,8 @@
 
   function clipDur(clip, track) {
     if (track.kind === 'text') return clip.duration || 0;
-    return (clip.out - clip.in);
+    // 公式 A（speed_design.md §0.2）：视频片段时间轴长度 = (out - in) / speed。
+    return (clip.out - clip.in) / (clip.speed || 1);
   }
 
   function rebuildTimeline() {
@@ -221,7 +222,8 @@
           var clip = track.clips[ci];
           var media = mediaById.get(clip.mediaId);
           if (!media) continue;
-          var dur = clip.out - clip.in;
+          // 公式 A：视频段时间轴长度 = (out-in)/speed（tEnd/total/trackDur 随之正确，总时长贯穿点）。
+          var dur = (clip.out - clip.in) / (clip.speed || 1);
           if (!(dur > 0)) continue;
           var tStart = clip.start, tEnd = clip.start + dur;
           var seg = { clip: clip, media: media, tStart: tStart, tEnd: tEnd, dur: dur };
@@ -560,7 +562,8 @@
       scale: num(opts.scale, tf.scale),
       cx: num(opts.cx, tf.cx),
       cy: num(opts.cy, tf.cy),
-      opacity: clamp01(num(opts.opacity, tf.opacity))
+      opacity: clamp01(num(opts.opacity, tf.opacity)),
+      speed: clamp(num(opts.speed, 1), 0.25, 4)   // 变速倍率（speed_design.md §0.1），默认 1.0
     };
     if (!opts.noHistory) pushHistory();
     track.clips.push(clip);
@@ -632,12 +635,15 @@
     var rightId = (track.kind === 'video') ? nextId('clip') : nextId('txt');
     var right;
     if (track.kind === 'video') {
-      var srcCut = clip.in + leftLen;
+      // 公式 4（speed_design.md §0.4）：leftLen 已是时间轴长度（clipDur 含 speed），
+      // 源切点 srcCut = in + leftLen*speed；左右两段沿用同一 speed，时间轴长度自然相加 = 原长。
+      var srcCut = clip.in + leftLen * (clip.speed || 1);
       right = {
         id: rightId, mediaId: clip.mediaId, in: srcCut, out: clip.out, start: atSec,
-        scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity
+        scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity,
+        speed: (clip.speed == null ? 1 : clip.speed)
       };
-      clip.out = srcCut; // 左段保留原 id
+      clip.out = srcCut; // 左段保留原 id 与原 speed
     } else {
       right = JSON.parse(JSON.stringify(clip));
       right.id = rightId;
@@ -723,20 +729,22 @@
     if (!opts.noHistory) pushHistory();
 
     if (track.kind === 'video') {
+      var sp = (clip.speed || 1);   // 变速：deltaSec 为“源秒”增量；时间轴长 = 源长/sp
       if (edge === 'in') {
-        // 同步改 start 与源 in：Δ = deltaSec；in_new=in+Δ，start_new=start+Δ
-        var lo = -clip.in;                          // in 不可 < 0
-        var hi = (clip.out - clip.in) - MIN;        // 保 dur >= MIN
-        // 不得越过上一片段右缘
+        // 改源 in 与时间轴 start：in_new=in+Δ(源)，start_new=start+Δ/sp(时间轴)
+        var lo = -clip.in;                            // in 不可 < 0
+        var hi = (clip.out - clip.in) - MIN * sp;     // 时间轴长 >= MIN
+        lo = Math.max(lo, -clip.start * sp);          // start 不可 < 0
+        // 不得越过上一片段右缘（prevEnd 为时间轴秒，换算成源增量需 *sp）
         var prevEnd = prevClipEnd(track, clip);
-        if (prevEnd != null) lo = Math.max(lo, prevEnd - clip.start);
+        if (prevEnd != null) lo = Math.max(lo, (prevEnd - clip.start) * sp);
         var d = clamp(deltaSec, lo, hi);
-        clip.in += d; clip.start += d;
+        clip.in += d; clip.start += d / sp;
       } else { // out
         var hiR = (media ? media.duration : Infinity) - clip.out;
-        var loR = MIN - (clip.out - clip.in);
+        var loR = MIN * sp - (clip.out - clip.in);    // 时间轴长 >= MIN
         var nextStart = nextClipStart(track, clip);
-        if (nextStart != null) hiR = Math.min(hiR, nextStart - (clip.start + (clip.out - clip.in)));
+        if (nextStart != null) hiR = Math.min(hiR, (nextStart - clip.start) * sp - (clip.out - clip.in));
         var d2 = clamp(deltaSec, loR, hiR);
         clip.out += d2;
       }
@@ -792,6 +800,21 @@
     bus.emit('transform:changed', { trackId: trackId, clipId: clipId });
   }
   function getClip(trackId, clipId) { return getClipIn(trackId, clipId); }
+
+  // 变速倍率 mutator（speed_design.md §0.1）。仅对 video 轨片段生效；text 轨忽略。
+  // speed 钳制到 [0.25,4]，缺省 1；opts.noHistory:true 时不压栈（连续手势合并，由调用方负责 pushHistory）。
+  // 改 speed 改变时间轴长度/总时长 → 必须 emit 'clips:changed'（而非 transform:changed），
+  // 让 player 重建派生 + 重对齐源时间。
+  function setClipSpeed(trackId, clipId, speed, opts) {
+    opts = opts || {};
+    var track = getTrack(trackId); if (!track || track.kind !== 'video') return;
+    var clip = getClipIn(trackId, clipId); if (!clip) return;
+    var v = clamp(num(speed, 1), 0.25, 4);
+    if (!opts.noHistory) pushHistory();
+    clip.speed = v;
+    changed('setClipSpeed');
+    bus.emit('clips:changed', { trackId: trackId });
+  }
 
   /* ===================================================================== *
    * 15. 文字片段 mutator（contract_v2 §3.2 文字片段）
@@ -988,6 +1011,7 @@
           c.scale = clamp(num(c.scale, 1), 0.02, 4);
           c.cx = num(c.cx, 0.5); c.cy = num(c.cy, 0.5);
           c.opacity = clamp01(num(c.opacity, 1));
+          c.speed = clamp(num(c.speed, 1), 0.25, 4);      // 变速倍率（缺省 1，深拷贝已带，仅 clamp）
           return c.out > c.in;                            // B2
         });
       } else { // text
@@ -1125,6 +1149,7 @@
       // clip
       rngScale: $('rngClipScale'), numScale: $('numClipScale'),
       numCx: $('numClipCx'), numCy: $('numClipCy'), rngOpacity: $('rngClipOpacity'),
+      rngSpeed: $('rngSpeed'), numSpeed: $('propSpeed'),
       btnContain: $('btnClipContain'), btnCover: $('btnClipCover'), btnFull: $('btnClipFull'),
       numIn: $('numClipIn'), numOut: $('numClipOut'), numStart: $('numClipStart'),
       chkTrackMuted: $('chkTrackMuted'), rngTrackVolume: $('rngTrackVolume'),
@@ -1185,6 +1210,28 @@
       P.rngOpacity.addEventListener('input', function () { sliderStart(); tp({ opacity: num(P.rngOpacity.value, 1) }, false); });
       P.rngOpacity.addEventListener('change', sliderEnd);
     }
+    // 变速倍率（speed_design.md §1.1）：滑块拖动一次手势压一次历史（复用 _clipDragHist），
+    // number 输入单压一次；两控件互相同步，显示 1.50× 形式（number 保留两位小数）。
+    if (P.rngSpeed) {
+      P.rngSpeed.addEventListener('pointerdown', sliderStart);
+      P.rngSpeed.addEventListener('input', function () {
+        var c = curClip(); if (!c) return;
+        sliderStart();
+        var v = clamp(num(P.rngSpeed.value, 1), 0.25, 4);
+        setClipSpeed(selection.trackId, selection.clipId, v, { noHistory: true });
+        if (P.numSpeed) P.numSpeed.value = v.toFixed(2);
+      });
+      P.rngSpeed.addEventListener('change', sliderEnd);
+    }
+    if (P.numSpeed) P.numSpeed.addEventListener('change', function () {
+      var c = curClip(); if (!c) return;
+      var v = clamp(num(P.numSpeed.value, 1), 0.25, 4);
+      pushHistory();
+      setClipSpeed(selection.trackId, selection.clipId, v, { noHistory: true });
+      if (P.rngSpeed) P.rngSpeed.value = v;
+      P.numSpeed.value = v.toFixed(2);
+    });
+
     if (P.btnContain) P.btnContain.addEventListener('click', function () { applyFit('contain'); });
     if (P.btnCover) P.btnCover.addEventListener('click', function () { applyFit('cover'); });
     if (P.btnFull) P.btnFull.addEventListener('click', function () { applyFit('full'); });
@@ -1302,6 +1349,9 @@
     if (P.numCx) P.numCx.value = (+c.cx).toFixed(3);
     if (P.numCy) P.numCy.value = (+c.cy).toFixed(3);
     if (P.rngOpacity) P.rngOpacity.value = c.opacity;
+    var sp = (c.speed == null ? 1 : c.speed);
+    if (P.rngSpeed) P.rngSpeed.value = sp;
+    if (P.numSpeed) P.numSpeed.value = (+sp).toFixed(2);
     if (P.numIn) P.numIn.value = (+c.in).toFixed(2);
     if (P.numOut) P.numOut.value = (+c.out).toFixed(2);
     if (P.numStart) P.numStart.value = (+c.start).toFixed(2);
@@ -1512,7 +1562,7 @@
     // 视频片段
     addClipFromMedia: addClipFromMedia, splitClip: splitClip, removeClip: removeClip,
     rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip,
-    setClipTransform: setClipTransform, getClip: getClip,
+    setClipTransform: setClipTransform, setClipSpeed: setClipSpeed, getClip: getClip,
     duplicateClip: duplicateClip, copyClip: copyClip, pasteClip: pasteClip,
 
     // 文字片段
