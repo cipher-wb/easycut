@@ -132,6 +132,16 @@
     });
     return best;
   }
+  // 左缘变速需前段右缘作 start 下界（同轨、位于当前片段左侧的片段中，最大的 end）。
+  function prevClipEnd(track, clip) {
+    var myStart = clip.start, best = null;
+    track.clips.forEach(function (c) {
+      if (c === clip) return;
+      var e = c.start + clipDur(c, track);
+      if (e <= myStart + 1e-6) { if (best == null || e > best) best = e; }
+    });
+    return best;
+  }
 
   /* ---------- 选中态读取（容错 contract getSelection 与 v1 selectedClipId） ---------- */
   function selectedClipId() {
@@ -261,7 +271,23 @@
     c.appendChild(el('div', 'clip-trim left'));
     c.appendChild(el('div', 'clip-trim right'));
     c.appendChild(el('div', 'clip-label-dur', fmt(dur)));
+    // 倍率角标（B）：视频片段 speed≠1 时在块中间显示倍数（pointer-events:none，不挡把手/拖拽）。
+    if (!isText) {
+      var sp = clip.speed || 1;
+      var badge = el('div', 'clip-speed-badge', sp.toFixed(2) + '×');
+      if (Math.abs(sp - 1) < 1e-6) badge.hidden = true;
+      c.appendChild(badge);
+    }
     return c;
+  }
+
+  // 实时更新拖拽中的片段倍率角标（B）：speed≠1 显示，=1 隐藏
+  function updateSpeedBadge(clipEl, speed) {
+    if (!clipEl) return;
+    var badge = clipEl.querySelector('.clip-speed-badge');
+    if (!badge) return;
+    if (Math.abs(speed - 1) < 1e-6) { badge.hidden = true; }
+    else { badge.hidden = false; badge.textContent = speed.toFixed(2) + '×'; }
   }
 
   /* 4.4 刻度尺（按 pxPerSec 选档；主刻度标时间码） */
@@ -404,11 +430,12 @@
     var dxSec = xToTime(e.clientX - drag.startX);
     if (Math.abs(e.clientX - drag.startX) > 2) drag.moved = true;
     var snapOff = e.altKey; // 实时读 Alt：拖动中可临时关吸附
-    // Shift + 拖【右边缘】且片段为视频 → 变速（speed_design.md §2.1）。
-    // 一旦判为变速，后续 move 持续走 speedTrim（不因中途松开 Shift 切回裁剪，避免抖动）。
+    // Shift + 拖【任一端边缘】且片段为视频 → 变速（speed_design.md §2.1，A：左右缘均可）。
+    // 一旦判为变速，后续 move 持续走 speedTrim（不因中途松开 Shift 切回裁剪，避免抖动）；
+    // drag.speedEdge 记住是哪一端（'left'/'right'），左缘锚右、右缘锚左。
     if (drag.mode === 'speed' ||
-        (drag.mode === 'trim-right' && e.shiftKey && drag.track && drag.track.kind === 'video')) {
-      drag.mode = 'speed';
+        ((drag.mode === 'trim-right' || drag.mode === 'trim-left') && e.shiftKey && drag.track && drag.track.kind === 'video')) {
+      if (drag.mode !== 'speed') { drag.speedEdge = (drag.mode === 'trim-left') ? 'left' : 'right'; drag.mode = 'speed'; }
       doSpeedTrim(e, dxSec, snapOff);
       return;
     }
@@ -416,35 +443,64 @@
     else doTrim(e, dxSec, snapOff, drag.mode === 'trim-left');
   }
 
-  /* 变速拖拽（Shift + 右缘，in/out 固定，只改 speed）—— 仅视觉更新，松手才落数据。
+  /* 变速拖拽（Shift + 任一端边缘，in/out 固定，只改 speed）—— 仅视觉更新，松手才落数据。
    * 公式 A：tlLen = (out-in)/speed；speed∈[0.25,4] ⇒ tlLen∈[(out-in)/4,(out-in)/0.25]。
-   * 由指针求 desiredTlLen（带磁吸、不与后段重叠、≥MIN），钳制后 speed=(out-in)/tlLen。 */
+   *
+   * 右缘变速（speedEdge='right'）：左缘 start 锚定不动，右缘随指针 → tlLen 变 → speed 变。
+   * 左缘变速（speedEdge='left'）：右缘 end=start+tlLen 锚定不动，左缘随指针 → tlLen 变 → speed 变。
+   *   左缘左移=拉长(tlLen↑)=变慢(speed↓)；右移=缩短=变快。落地时 start 改变 → commit 需 moveClip。
+   * 钳制：speed∈[0.25,4]，tlLen≥MIN，且不越邻段（右缘不越后段、左缘不越前段 prevClipEnd），start≥0。 */
   function doSpeedTrim(e, dxSec, snapOff) {
     var o = drag.orig, track = drag.track;
     var srcLen = (o.out || 0) - (o.in || 0);            // 源长度恒定
     var MIN = minClipLen();
     var curTlLen = srcLen / (o.speed || 1);             // 拖前的时间轴长度
-    var desiredEnd = o.start + curTlLen + dxSec;        // 右缘随指针
-    // 磁吸右缘（只吸被拖的那条边缘）
-    if (!snapOff) { var s = snapEdge(desiredEnd, drag.clip.id); if (s.hit && s.value > o.start + MIN) desiredEnd = s.value; }
-    else hideSnapGuide();
-    var tlLen = desiredEnd - o.start;
-    // 不与后一片段重叠：tlLen 上界 = nextStart - start（无后段则 Infinity）
-    var nextStart = nextClipStart(track, drag.clip);
-    var maxByNeighbor = (nextStart != null) ? (nextStart - o.start) : Infinity;
-    // speed∈[0.25,4] ⇒ tlLen∈[srcLen/4, srcLen/0.25]，并 ≥MIN，并 ≤maxByNeighbor
-    var tlMin = Math.max(MIN, srcLen / 4);
-    var tlMax = Math.min(srcLen / 0.25, maxByNeighbor);
-    if (tlMax < tlMin) tlMax = tlMin;                   // 后段太近时退化为最小，防 clamp 反转
-    tlLen = clamp(tlLen, tlMin, tlMax);
+    var origEnd = o.start + curTlLen;                   // 拖前的右缘
+    var isLeft = (drag.speedEdge === 'left');
+
+    var tlMin = Math.max(MIN, srcLen / 4);              // speed=4 → 最短
+    var tlMax = srcLen / 0.25;                          // speed=0.25 → 最长
+    var newStart, tlLen;
+
+    if (isLeft) {
+      // 右缘锚定 origEnd 不变；左缘 = start + dxSec（随指针），tlLen = origEnd - 左缘。
+      var desiredStart = o.start + dxSec;
+      // 磁吸左缘（只吸被拖的那条边缘）
+      if (!snapOff) { var sl = snapEdge(desiredStart, drag.clip.id); if (sl.hit) desiredStart = sl.value; }
+      else hideSnapGuide();
+      // 不越前段右缘：start 下界 = max(0, prevClipEnd)
+      var prevEnd = prevClipEnd(track, drag.clip);
+      var startLo = Math.max(0, (prevEnd != null) ? prevEnd : 0);
+      // tlLen 约束 ⇒ start 约束：start∈[origEnd-tlMax, origEnd-tlMin]，再交 [startLo, +∞)
+      var startMin = Math.max(startLo, origEnd - tlMax);
+      var startMax = origEnd - tlMin;
+      if (startMax < startMin) startMin = startMax;     // 前段太近时退化，防反转
+      newStart = clamp(desiredStart, startMin, startMax);
+      tlLen = origEnd - newStart;
+    } else {
+      // 左缘锚定 start 不变；右缘 = origEnd + dxSec（随指针），tlLen = 右缘 - start。
+      var desiredEnd = origEnd + dxSec;
+      if (!snapOff) { var sr = snapEdge(desiredEnd, drag.clip.id); if (sr.hit && sr.value > o.start + MIN) desiredEnd = sr.value; }
+      else hideSnapGuide();
+      // 不越后段左缘：tlLen 上界 = nextStart - start（无后段则 Infinity）
+      var nextStart = nextClipStart(track, drag.clip);
+      var maxByNeighbor = (nextStart != null) ? (nextStart - o.start) : Infinity;
+      var tlMaxR = Math.min(tlMax, maxByNeighbor);
+      if (tlMaxR < tlMin) tlMaxR = tlMin;
+      tlLen = clamp(desiredEnd - o.start, tlMin, tlMaxR);
+      newStart = o.start;
+    }
+
     var speed = clamp(srcLen / tlLen, 0.25, 4);
-    drag.pending = { speed: speed, tlLen: srcLen / speed };
-    // 视觉：left 不变（右缘伸缩），宽度按变速后 tlLen
-    drag.el.style.left = timeToX(o.start) + 'px';
-    drag.el.style.width = Math.max(MIN_PX, timeToX(srcLen / speed)) + 'px';
-    // 倍率提示（可选）：在片段时长角标上显示当前倍率
+    var finalTlLen = srcLen / speed;
+    drag.pending = { speed: speed, tlLen: finalTlLen, start: newStart };
+    // 视觉：左缘变速时 left 随 newStart 移动，宽度按变速后 tlLen
+    drag.el.style.left = timeToX(newStart) + 'px';
+    drag.el.style.width = Math.max(MIN_PX, timeToX(finalTlLen)) + 'px';
+    // 实时更新中间倍率角标（B）+ 时长角标
+    updateSpeedBadge(drag.el, speed);
     var durEl = drag.el.querySelector('.clip-label-dur');
-    if (durEl) durEl.textContent = speed.toFixed(2) + '×';
+    if (durEl) durEl.textContent = fmt(finalTlLen);
     drag.el.title = '变速 ' + speed.toFixed(2) + '×';
   }
 
@@ -571,8 +627,23 @@
       App.moveClip(d.track.id, d.clip.id, resolved, newTrackId, { noHistory: true });
     } else if (d.mode === 'speed') {
       // 变速：in/out 不变，只改 speed。一次手势一次撤销步（mutator 传 noHistory）。
+      // 左缘变速会使 start 改变（右缘锚定）：先 setClipSpeed 改 tlLen，再 moveClip 落新 start。
+      var newStart = (d.pending.start != null) ? d.pending.start : d.orig.start;
+      var movesStart = Math.abs(newStart - d.orig.start) > 1e-6;
+      // 左缘变速：落地前预检新时长能放在 newStart（不与他段重叠），否则整体取消，
+      // 避免“speed 改了但 start 没落地”的半提交（静态审查 low）。
+      if (movesStart) {
+        var newTlLen = (d.orig.out - d.orig.in) / (d.pending.speed || 1);
+        if (resolveOverlap(d.track, d.clip.id, newStart, newTlLen, d.track) == null) {
+          App.toast && App.toast('变速后位置与其他片段重叠，已取消', 'error');
+          return renderAll();
+        }
+      }
       App.pushHistory();
       App.setClipSpeed(d.track.id, d.clip.id, d.pending.speed, { noHistory: true });
+      if (movesStart) {
+        App.moveClip(d.track.id, d.clip.id, newStart, undefined, { noHistory: true });
+      }
       // mutator emit clips:changed -> renderAll，恢复角标/宽度为真实值
     } else if (d.mode === 'trim-left') {
       App.pushHistory();
@@ -819,57 +890,8 @@
   }
   function hideInsertCue() { if (insertCueEl) insertCueEl.hidden = true; }
 
-  /* =======================================================================
-   * OS 文件拖入窗口（上传入库）—— contract §2.7 /api/upload，§4.7 #dropOverlay
-   * ===================================================================== */
-  function bindOsFileDrop() {
-    var depth = 0;
-    function showDrop(msg) {
-      if (!elDrop) return;
-      elDrop.hidden = false; elDrop.style.display = '';
-      if (msg) { var inner = elDrop.querySelector('.do-inner, .dm-inner, .drop-inner'); if (inner) inner.textContent = msg; }
-    }
-    function hideDrop() { if (elDrop) { elDrop.hidden = true; elDrop.style.display = 'none'; } }
-
-    window.addEventListener('dragenter', function (e) {
-      if (!hasFiles(e)) return; depth++; showDrop('松开以导入视频到素材库'); e.preventDefault();
-    });
-    window.addEventListener('dragover', function (e) {
-      if (hasFiles(e)) { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; }
-    });
-    window.addEventListener('dragleave', function () { if (--depth <= 0) { depth = 0; hideDrop(); } });
-    window.addEventListener('drop', function (e) {
-      if (!hasFiles(e)) return;
-      e.preventDefault(); depth = 0; hideDrop();
-      var files = [].filter.call(e.dataTransfer.files, function (f) { return /\.(mp4|mov|m4v|mkv|webm)$/i.test(f.name); });
-      if (!files.length) { App.toast && App.toast('请拖入 mp4 视频文件', 'error'); return; }
-      uploadSequential(files, 0, showDrop, hideDrop);
-    });
-  }
-  function uploadSequential(files, i, showDrop, hideDrop) {
-    if (i >= files.length) { hideDrop(); App.toast && App.toast('已导入 ' + files.length + ' 个视频到素材库', 'ok'); return; }
-    showDrop('上传中 ' + (i + 1) + '/' + files.length + ' …');
-    var done = function () { uploadSequential(files, i + 1, showDrop, hideDrop); };
-    // 优先用 contract App.importViaUpload(File)；否则直接 POST /api/upload
-    if (typeof App.importViaUpload === 'function') {
-      App.importViaUpload(files[i]).then(done).catch(function (err) {
-        App.toast && App.toast('上传失败：' + (err && err.message || err), 'error'); done();
-      });
-    } else {
-      var fd = new FormData(); fd.append('file', files[i], files[i].name);
-      fetch('/api/upload', { method: 'POST', body: fd }).then(function (r) { return r.json(); })
-        .then(function (res) {
-          var m = res && (res.media || (res.length ? res[0] : null));
-          if (m && App.addMedia) { App.addMedia(m); }
-          done();
-        }).catch(function (err) { App.toast && App.toast('上传失败：' + (err && err.message || err), 'error'); done(); });
-    }
-  }
-  function hasFiles(e) {
-    var ty = e.dataTransfer && e.dataTransfer.types;
-    if (!ty) return false;
-    return [].indexOf.call(ty, 'Files') >= 0;
-  }
+  /* OS 文件拖入窗口（分区到素材库 / 轨道）统一由 app.js 的 bindOsFileDrop 负责，
+   * 此处不再实现，避免双重 window 监听导致一次拖放上传两次。 */
 
   /* =======================================================================
    * 刻度尺 / 播放头拖动 seek
@@ -941,6 +963,51 @@
   }
 
   /* =======================================================================
+   * Shift 指针提示（A）：按住 Shift 时给 body 加 .shift-edge，
+   * 让悬停在 .clip-trim 把手上的指针变为变速样式（style.css 负责定义，与裁剪 ew-resize 区分）。
+   * 仅响应 Shift 键；窗口失焦时清除，防卡死高亮。
+   * ===================================================================== */
+  function bindShiftCursor() {
+    function setShift(on) {
+      if (document.body) document.body.classList.toggle('shift-edge', !!on);
+    }
+    window.addEventListener('keydown', function (e) { if (e.key === 'Shift' || e.shiftKey) setShift(true); });
+    window.addEventListener('keyup', function (e) { if (e.key === 'Shift' || !e.shiftKey) setShift(false); });
+    window.addEventListener('blur', function () { setShift(false); });
+  }
+
+  /* =======================================================================
+   * 接口①（供 app.js OS 文件拖放分区调用）
+   *   trackDropInfo(clientX, clientY) -> {trackId, timeSec} | null
+   *   setDropTargetTrack(trackId | null) -> 给匹配的 .track-row 加/清 .drop-active
+   * ===================================================================== */
+  // 几何命中 #tracksArea 内某条【视频且未锁】轨道行；命中返回 {trackId, timeSec}（timeSec>=0），否则 null。
+  function trackDropInfo(clientX, clientY) {
+    if (!elArea) return null;
+    var rows = elArea.querySelectorAll('.track-row');
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i].getBoundingClientRect();
+      if (clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom) {
+        var track = findTrack(rows[i].dataset.trackId);
+        if (track && track.kind === 'video' && !track.locked) {
+          return { trackId: track.id, timeSec: clientXToTime(clientX) };
+        }
+        return null; // 命中了某行但非合法视频轨 → 不作为轨道目标
+      }
+    }
+    return null;
+  }
+  // 给匹配 trackId 的 .track-row 加 class "drop-active"，其余清除；传 null 清除全部。
+  function setDropTargetTrack(trackId) {
+    if (!elArea) return;
+    var rows = elArea.querySelectorAll('.track-row');
+    for (var i = 0; i < rows.length; i++) {
+      var on = (trackId != null && rows[i].dataset.trackId === ('' + trackId));
+      rows[i].classList.toggle('drop-active', on);
+    }
+  }
+
+  /* =======================================================================
    * bus 接线 + 初始化
    * ===================================================================== */
   function bindBus() {
@@ -981,6 +1048,7 @@
     bindZoom();
     bindAddTrack();
     bindBinDrop();
+    bindShiftCursor();
     // 注意：OS 文件拖入窗口的导入由 app.js 的 bindOsFileDrop 统一处理。
     // 此处不再重复绑定，否则同一次拖放会被两个 window 监听各上传一次 → 素材库出现两条。
     bindBus();
@@ -993,7 +1061,10 @@
     setZoom: setZoom,
     zoomIn: function () { zoomStep(+1); },
     zoomOut: function () { zoomStep(-1); },
-    getPxPerSec: function () { return pxPerSec; }
+    getPxPerSec: function () { return pxPerSec; },
+    // 接口①：供 app.js OS 文件拖放分区调用
+    trackDropInfo: trackDropInfo,
+    setDropTargetTrack: setDropTargetTrack
   };
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

@@ -1041,11 +1041,20 @@
   /* ===================================================================== *
    * 20. 拖拽遮罩（OS 文件拖入窗口，contract_v2 §4.7 #dropOverlay）
    * ===================================================================== */
-  function setDropOverlayText(txt) {
+  // 设置遮罩主标题；可选 sub 设置副标题（传 undefined 不动副标题，传 '' 清空）。
+  // 遮罩层 CSS 为 pointer-events:none（见 style.css），不会拦截几何/elementFromPoint 命中。
+  function setDropOverlayText(txt, sub) {
     var ov = document.getElementById('dropOverlay'); if (!ov) return;
     ov.hidden = false; ov.style.display = '';
-    var inner = ov.querySelector('.do-inner') || ov;
-    if (inner !== ov) inner.textContent = txt || '松开导入素材';
+    var inner = ov.querySelector('.do-inner');
+    if (!inner) { ov.textContent = txt || '松开导入素材'; return; }
+    var titleEl = inner.querySelector('.do-title');
+    if (titleEl) titleEl.textContent = txt || '松开导入素材';
+    else inner.textContent = txt || '松开导入素材';
+    if (sub !== undefined) {
+      var subEl = inner.querySelector('.do-sub');
+      if (subEl) subEl.textContent = sub || '';
+    }
   }
   function hideDropOverlay() {
     var ov = document.getElementById('dropOverlay'); if (!ov) return;
@@ -1053,20 +1062,105 @@
   }
   function hasFiles(e) { return e.dataTransfer && [].indexOf.call(e.dataTransfer.types || [], 'Files') >= 0; }
 
+  // —— 优化 C：OS 文件拖拽分区（素材库 vs 轨道）——
+  // 拖放高亮的清理：去轨道高亮 + 素材库去高亮 + 隐藏遮罩。
+  function clearDropHighlights() {
+    try { if (App.timeline && typeof App.timeline.setDropTargetTrack === 'function') App.timeline.setDropTargetTrack(null); } catch (_) {}
+    var mp = document.getElementById('mediaPanel');
+    if (mp) mp.classList.remove('drop-active');
+    hideDropOverlay();
+  }
+  // 判定指针所处分区：
+  //   先问 timeline.trackDropInfo(x,y)：命中【视频且未锁】轨道行 → {zone:'track', trackId, timeSec}；
+  //   否则若指针在 #mediaPanel 矩形内 → {zone:'media'}；
+  //   否则 {zone:'other'}（按 media 处理）。
+  function dropZoneAt(clientX, clientY) {
+    if (App.timeline && typeof App.timeline.trackDropInfo === 'function') {
+      var info = null;
+      try { info = App.timeline.trackDropInfo(clientX, clientY); } catch (_) { info = null; }
+      if (info && info.trackId != null) {
+        return { zone: 'track', trackId: info.trackId, timeSec: Math.max(0, num(info.timeSec, 0)) };
+      }
+    }
+    var mp = document.getElementById('mediaPanel');
+    if (mp) {
+      var r = mp.getBoundingClientRect();
+      if (clientX >= r.left && clientX <= r.right && clientY >= r.top && clientY <= r.bottom) {
+        return { zone: 'media' };
+      }
+    }
+    return { zone: 'other' };
+  }
+  // 据分区更新高亮 + 提示文本。
+  function applyDropZone(z) {
+    var mp = document.getElementById('mediaPanel');
+    if (z.zone === 'track') {
+      try { if (App.timeline && typeof App.timeline.setDropTargetTrack === 'function') App.timeline.setDropTargetTrack(z.trackId); } catch (_) {}
+      if (mp) mp.classList.remove('drop-active');
+      setDropOverlayText('松开：导入并添加到此轨道', '将作为片段添加到该视频轨的指针位置');
+    } else { // media / other 都按导入素材库处理
+      try { if (App.timeline && typeof App.timeline.setDropTargetTrack === 'function') App.timeline.setDropTargetTrack(null); } catch (_) {}
+      if (mp) mp.classList.add('drop-active');
+      setDropOverlayText('松开：导入到素材库', '支持 mp4 文件，导入后进入素材库');
+    }
+  }
+
+  // 仅取 mp4 文件（与 importFiles 过滤一致）。
+  function pickMp4(fileList) {
+    return [].slice.call(fileList || []).filter(function (f) { return /\.mp4$/i.test(f.name); });
+  }
+  // drop 到某视频轨：每个文件先 importViaUpload 入库，再 addClipFromMedia 到该轨；
+  // 多文件依次排开——第二个起的 start 接续上一片段末尾（用 addClipFromMedia 返回的片段实际落点 + 时长推算）。
+  function importToTrack(files, trackId, startSec) {
+    var added = 0, nextStart = Math.max(0, num(startSec, 0));
+    return files.reduce(function (chain, f, i) {
+      return chain.then(function () {
+        setDropOverlayText('上传中 ' + (i + 1) + '/' + files.length + ' …', '');
+        return importViaUpload(f).then(function (mediaId) {
+          if (!mediaId) return;
+          var clipId = App.addClipFromMedia(mediaId, trackId, nextStart);
+          if (clipId) {
+            added++;
+            // 推进下一个 start：用刚加片段的实际落点 + 其时间轴长度（含变速），紧贴排列。
+            var loc = locateClip(clipId);
+            if (loc) nextStart = loc.clip.start + clipDur(loc.clip, loc.track);
+          }
+          // addClipFromMedia 失败（轨满/锁定等）时素材仍已入库，符合“既导入素材库”的语义。
+        }).catch(function (e) { toast('上传失败（' + f.name + '）：' + e.message, 'error'); });
+      });
+    }, Promise.resolve()).then(function () {
+      hideDropOverlay();
+      if (added) toast('已导入并添加 ' + added + ' 个片段到轨道', 'info', 1800);
+      else toast('已导入到素材库', 'info', 1600);
+    });
+  }
+
   function bindOsFileDrop() {
     var depth = 0;
     window.addEventListener('dragenter', function (e) {
-      if (!hasFiles(e)) return; depth++; e.preventDefault(); setDropOverlayText('松开导入素材到素材库');
+      if (!hasFiles(e)) return; depth++; e.preventDefault();
+      applyDropZone(dropZoneAt(e.clientX, e.clientY));
     });
     window.addEventListener('dragover', function (e) {
       if (!hasFiles(e)) return; e.preventDefault();
       try { e.dataTransfer.dropEffect = 'copy'; } catch (_) {}
+      applyDropZone(dropZoneAt(e.clientX, e.clientY));
     });
-    window.addEventListener('dragleave', function () { if (--depth <= 0) { depth = 0; hideDropOverlay(); } });
+    window.addEventListener('dragleave', function () { if (--depth <= 0) { depth = 0; clearDropHighlights(); } });
     window.addEventListener('drop', function (e) {
       if (!hasFiles(e)) return;
       e.preventDefault(); depth = 0;
-      importFiles(e.dataTransfer.files);
+      var z = dropZoneAt(e.clientX, e.clientY);
+      clearDropHighlights();
+      var files = pickMp4(e.dataTransfer.files);
+      if (!files.length) { toast('请拖入 mp4 文件', 'error'); return; }
+      if (z.zone === 'track' && getTrack(z.trackId) && getTrack(z.trackId).kind === 'video' && !getTrack(z.trackId).locked) {
+        setDropOverlayText('上传中 …', '');
+        importToTrack(files, z.trackId, z.timeSec);
+      } else {
+        // media / other / 轨道非法 → 退回仅导入素材库（复用现有 importFiles，保持行为不变）。
+        importFiles(e.dataTransfer.files);
+      }
     });
   }
 

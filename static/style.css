@@ -125,6 +125,12 @@ select { cursor: pointer; }
   flex: 0 0 232px; width: 232px;
   background: var(--panel); border-right: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
+  position: relative;
+}
+/* OS 文件拖拽分区：素材库整体高亮（拖到素材库 / 其它区域时） */
+#mediaPanel.drop-active {
+  background: rgba(76,141,255,.12);
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 #mediaPanelHead {
   display: flex; align-items: center; justify-content: space-between;
@@ -405,6 +411,11 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 4px;
   background: repeating-linear-gradient(45deg, transparent 0 8px, rgba(255,255,255,.03) 8px 16px);
   pointer-events: none;
 }
+/* OS 文件拖拽分区：目标轨道行高亮（拖到此视频轨上方时） */
+.track-row.drop-active {
+  background: rgba(76,141,255,.16);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 
 /* 片段块 .clip（视频）/ .text-clip（文字），绝对定位 */
 .clip, .text-clip {
@@ -455,6 +466,33 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 4px;
   background: rgba(255,255,255,.18);
 }
 .clip-trim:hover { background: rgba(255,255,255,.4) !important; }
+
+/* ---- 变速操作（Shift + 拖两端把手）---- */
+/* 按住 Shift 时，把手指针切换为变速样式（区别于裁剪的 ew-resize） */
+body.shift-edge .clip-trim { cursor: all-scroll; }
+/* 变速悬停态：把手以 accent 高亮，明确标识“当前是变速”而非裁剪 */
+body.shift-edge .clip:hover .clip-trim,
+body.shift-edge .clip.selected .clip-trim {
+  background: rgba(76,141,255,.5);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+body.shift-edge .clip .clip-trim:hover {
+  background: var(--accent) !important;
+  box-shadow: inset 0 0 0 1px #fff;
+}
+
+/* 片段中间倍率角标 .clip-speed-badge（speed≠1 时显示，如 "2.00×"） */
+.clip-speed-badge {
+  position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 1px 7px; border-radius: 9px;
+  background: rgba(0,0,0,.62); color: #fff;
+  font-size: 11px; font-weight: 600; line-height: 1.5;
+  font-variant-numeric: tabular-nums; letter-spacing: .3px;
+  text-shadow: 0 1px 2px rgba(0,0,0,.5);
+  white-space: nowrap; pointer-events: none; z-index: 7;
+}
+.clip-speed-badge[hidden] { display: none; }
 
 /* 播放头竖线（贯穿所有轨道行） */
 #playhead {
@@ -551,6 +589,7 @@ progress::-webkit-progress-value { background: var(--accent); }
   background: rgba(20,30,55,.82);
   display: flex; align-items: center; justify-content: center;
   backdrop-filter: blur(2px);
+  pointer-events: none;
 }
 #dropOverlay[hidden] { display: none; }
 #dropOverlay .do-inner {
