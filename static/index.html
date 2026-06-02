@@ -4,7 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>轻剪 — 多轨非线性编辑器</title>
+  <!-- 字体说明：界面走系统字体（CSS 已写好回退：苹方/微软雅黑/宋体），不依赖网络，离线可用。
+       若想要更精致的「思源宋体/黑体」外观，可在此加 Google Fonts 的 <link>（联网时生效）。 -->
   <link rel="stylesheet" href="/static/style.css" />
+  <script>
+    /* 主题预置：在首屏渲染前读取白天/夜间偏好并应用，避免闪烁 */
+    (function () { try { if (localStorage.getItem('qj-theme') === 'dark') document.documentElement.setAttribute('data-theme', 'dark'); } catch (e) {} })();
+  </script>
 </head>
 <body>
   <!-- ============ 顶部工具栏 #toolbar ============ -->
@@ -48,6 +54,9 @@
     </div>
     <div class="tb-group">
       <button id="btnShortcuts" type="button" title="查看全部快捷键 (F1 或 ?)">⌨ 快捷键</button>
+    </div>
+    <div class="tb-group">
+      <button id="btnTheme" type="button" title="切换白天 / 夜间模式">🌙 夜间</button>
     </div>
     <div class="tb-group">
       <button id="btnExport" type="button" disabled class="primary" title="导出为新的 mp4 文件 (Ctrl+E)">⬇ 导出</button>
@@ -470,5 +479,7 @@
   <!-- 工程系统 UI：依赖 App（在 app.js 之后） -->
   <script src="/static/projects.js"></script>
   <script src="/static/export.js"></script>
+  <!-- 白天 / 夜间主题切换 -->
+  <script src="/static/theme.js"></script>
 </body>
 </html>
