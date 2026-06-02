@@ -697,6 +697,11 @@ def _find_tool(name):
     exe = shutil.which(name)
     if exe:
         return exe
+    # 同目录回退：把 ffmpeg.exe / ffprobe.exe 直接放在本程序旁边即可（无需改 PATH）
+    here = os.path.dirname(os.path.abspath(__file__))
+    local_exe = os.path.join(here, name + ".exe")
+    if os.path.isfile(local_exe):
+        return local_exe
     candidates = []
     localapp = os.environ.get("LOCALAPPDATA")
     if localapp:

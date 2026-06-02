@@ -43,11 +43,18 @@
 
 ## 运行环境
 - **Windows 10/11**
-- **Python 3**（用于本地服务，纯标准库，无需 pip 安装任何东西）
-- **ffmpeg / ffprobe**（导出与解析视频；需可在命令行调用，或装在 WinGet 默认目录，程序会自动查找）
+- **Python 3**：建议用官网 <https://www.python.org> 的安装包（自带 `py` 启动器和 tkinter）。纯标准库、无需 pip。⚠️ 文件「打开 / 另存为」对话框依赖 **tkinter**——极简版 / 自定义安装若去掉了它，「选择导入」和「导出选保存位置」会点了没反应（重装官网版即可，默认就带）。
+- **ffmpeg / ffprobe（必须先装）**：导出和解析视频全靠它。程序启动时会自动在 ① 命令行 PATH ② WinGet 默认安装目录 ③ `server.py` 同目录 三处查找；**三处都没有的话，界面能正常打开，但一导入或导出就失败**。安装方法见下。
 - 一个现代浏览器（Edge / Chrome 等）
 
-> 不需要联网，不需要安装额外依赖。前端是纯原生网页，后端是一个 Python 小服务。
+> 不需要联网、不需要 pip 依赖。前端是纯原生网页，后端是一个 Python 小服务。
+
+### 安装 ffmpeg（只做一次，任选一种）
+1. **WinGet（最推荐）**：打开 PowerShell 执行 `winget install Gyan.FFmpeg`，装完重新双击 `启动.bat`。
+2. **手动加 PATH**：到 <https://www.gyan.dev/ffmpeg/builds/> 下载静态包，解压后把其中的 `bin` 目录加入系统环境变量 PATH。
+3. **最省事**：把解压出的 `ffmpeg.exe` 和 `ffprobe.exe` 两个文件，直接复制到 `server.py` 所在的文件夹里即可（程序会自动找到，无需改 PATH）。
+
+装好后在命令行执行 `ffmpeg -version` 和 `ffprobe -version`，能打印出版本号就成功了。
 
 ---
 
@@ -239,6 +246,8 @@
 
 ## 十二、常见问题 FAQ
 - **点「导入」没反应 / 页面打不开**：后台服务没运行。重新双击 `启动.bat`，并保持黑色窗口开启。
+- **导入视频后没反应 / 一点导出就失败（但页面能正常打开）**：八成是**没装 ffmpeg**。看启动黑窗里 `ffmpeg :` 和 `ffprobe :` 那两行——如果显示的只是 `ffmpeg`、`ffprobe`（而不是一段完整的 `.exe` 路径），就是没找到。按上面「安装 ffmpeg」装好后重开 `启动.bat`。
+- **点「选择导入」或「导出」时不弹文件对话框**：你的 Python 缺少 tkinter，到官网重装 Python 3（默认选项即可，会自带）。
 - **双击 `启动.bat` 满屏「不是内部或外部命令」**：早期编码问题，已修复（启动脚本现为纯英文）。确认 `启动.bat` 与 `server.py` 在同一文件夹。
 - **端口被占用**：会自动换端口，以黑窗里显示的网址为准。
 - **拖拽导入很慢**：拖拽会复制整个文件，大视频请改用「选择导入」（用原文件、不复制）。
@@ -261,6 +270,6 @@
   - `projects/`、`media_store/` —— 运行时生成的用户数据（工程库 / 持久素材副本），已 .gitignore
 - **核心模型**：`project = { output, media[], tracks[] }`；轨道数组顺序即图层 z 序（末尾在最上）；片段几何用百分比（预览与导出同比）；视频片段时间轴长度 = `(out-in)/speed`。工程文件 `projects/<id>/project.json` 即此模型 + 元信息；加载时按路径重新探测素材（在线/离线）。
 - **UI 风格**：暖色「Claude 风格」，全部用 CSS 变量（`--bg/--panel/--accent/--text…`），深色主题由 `<html data-theme="dark">` 切换。新增 UI 一律复用这套变量，勿写死颜色。字体走系统（CSS 已有回退链），不依赖网络。
-- 详细数据模型 / API 契约 / ffmpeg 配方见 `_build/` 下的设计文档（contract / ffmpeg_recipe / engine / timeline / project_design / speed 等）。
+- 详细数据模型 / API 契约 / ffmpeg 配方等设计文档为开发者本地的内部资料（`_build/`，**未随本工具分发**）；如需可向作者索取。
 
 > 维护约定：**每次修改功能都要同步更新本 README**（README 是面向用户的唯一使用说明）。详见 `CLAUDE.md`。

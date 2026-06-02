@@ -1,0 +1,2 @@
+# 启动器必须以 CRLF 交付：LF-only 的 .bat 在部分 Windows 上 cmd 解析 goto/if 会失败
+*.bat text eol=crlf
