@@ -990,7 +990,7 @@ def main():
     httpd.daemon_threads = True
 
     print("=" * 60)
-    print("  简单剪辑 v2  /  Multi-track NLE  —  本地服务已启动")
+    print("  轻剪 EasyCut v2  /  Multi-track NLE  —  本地服务已启动")
     print("=" * 60)
     print("  访问地址 / URL : %s" % url)
     print("  ffmpeg          : %s" % FFMPEG)

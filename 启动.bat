@@ -10,10 +10,10 @@ chcp 65001 >nul
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
-title Simple Editor - Server
+title QingJian EasyCut - Server
 
 echo ============================================================
-echo   Simple Editor  -  local multi-track video editor
+echo   QingJian EasyCut  -  local multi-track video editor
 echo ============================================================
 echo.
 echo   Starting local server... a browser tab will open.
