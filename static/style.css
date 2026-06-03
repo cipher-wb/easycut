@@ -1083,3 +1083,35 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
 .cmt-tag.done { opacity: .5; }
 .cmt-tag.stale { background: var(--danger); color: #fff; border-color: var(--danger); }
 .cmt-tag .cmt-text { pointer-events: none; display: block; overflow: hidden; text-overflow: ellipsis; }
+
+/* 评论右键菜单 + 文本气泡 */
+.cmt-ctxmenu {
+  position: fixed; z-index: 200; min-width: 180px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-sm); box-shadow: var(--shadow-pop);
+}
+.cmt-popover {
+  position: fixed; z-index: 201; width: 290px; max-width: 92vw; padding: 10px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: var(--r-md); box-shadow: var(--shadow-pop);
+}
+.cmt-pop-input {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 50px;
+  font: inherit; font-size: 13px; line-height: 1.55; padding: 8px 9px;
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: var(--input-bg); color: var(--text);
+}
+.cmt-pop-input:focus { outline: none; border-color: var(--accent); }
+.cmt-pop-row { display: flex; gap: 8px; margin-top: 8px; }
+.cmt-pop-row button { flex: 1; }
+.cmt-pop-row .danger { flex: 0 0 auto; min-width: 56px; }
+
+/* 区间评论标签的左右拖拽手柄（精调 A–B） */
+.cmt-tag.range { padding-left: 9px; padding-right: 9px; }
+.cmt-handle {
+  position: absolute; top: 0; width: 7px; height: 100%;
+  cursor: ew-resize; z-index: 2;
+}
+.cmt-handle.left { left: 0; }
+.cmt-handle.right { right: 0; }
+.cmt-tag.range:hover .cmt-handle { background: rgba(0,0,0,.12); }

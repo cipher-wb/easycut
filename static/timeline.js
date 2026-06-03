@@ -294,6 +294,10 @@
     var mark = c.status === 'done' ? '✓ ' : (c.status === 'stale' ? '⚠ ' : (c.kind === 'point' ? '📍' : '⟷ '));
     t.appendChild(el('span', 'cmt-text', mark + (c.text || '（空）')));
     t.title = (c.status === 'done' ? '[已执行] ' : (c.status === 'stale' ? '[锚点失效] ' : '')) + (c.text || '');
+    if (c.kind === 'range') {   // 区间评论：左右边缘手柄，可拖拽精调 A–B
+      t.appendChild(el('div', 'cmt-handle left'));
+      t.appendChild(el('div', 'cmt-handle right'));
+    }
     return t;
   }
   // 把一批评论渲进容器（自动错开不重叠），返回所占层数
@@ -460,21 +464,23 @@
     elArea.addEventListener('pointermove', onLanePointerMove);
     ['pointerup', 'pointercancel'].forEach(function (ev) { elArea.addEventListener(ev, onLanePointerUp); });
 
-    // 空白处点击：取消选中 + 定位播放头
+    // 空白处点击：取消选中 + 定位播放头（评论标签不触发）
     elArea.addEventListener('pointerdown', function (e) {
-      if (e.target.closest('.clip') || e.target.closest('.text-clip')) return;
+      if (e.target.closest('.clip') || e.target.closest('.text-clip') || e.target.closest('.cmt-tag')) return;
+      if (e.button != null && e.button !== 0) return;   // 右键留给评论菜单
       doClearSelection();
       startScrub(e);
     });
     // 双击两段之间的空白：删除该空隙（仅当前轨，后续片段左移补缝）
     elArea.addEventListener('dblclick', function (e) {
-      if (e.target.closest('.clip') || e.target.closest('.text-clip')) return;
+      if (e.target.closest('.clip') || e.target.closest('.text-clip') || e.target.closest('.cmt-tag')) return;
       var lane = laneAt(e); if (!lane || !lane.dataset.trackId) return;
       if (App.closeGap) App.closeGap(lane.dataset.trackId, clientXToTime(e.clientX));
     });
   }
 
   function onLanePointerDown(e) {
+    if (e.button != null && e.button !== 0) return;     // 右键不拖动片段（留给评论右键菜单）
     var clipEl = e.target.closest('.clip') || e.target.closest('.text-clip');
     if (!clipEl) return;
     var track = findTrack(clipEl.dataset.trackId);
@@ -982,6 +988,7 @@
    * 刻度尺 / 播放头拖动 seek
    * ===================================================================== */
   function startScrub(e) {
+    if (e.button != null && e.button !== 0) return;     // 仅左键 scrub（右键留给评论菜单）
     function seekAt(cx) {
       doSeek(clientXToTime(cx));  // 以 #tracksArea 左缘为原点（含滚动），与刻度/片段/播放头同 0 点
     }
@@ -998,6 +1005,129 @@
   function bindRuler() {
     if (!elRuler) return;
     elRuler.addEventListener('pointerdown', function (e) { e.preventDefault(); startScrub(e); });
+  }
+
+  /* =======================================================================
+   * 评论 / 批注交互：右键加评论、点标签编辑/删除
+   * ===================================================================== */
+  var cmtMenuEl = null, cmtPopEl = null;
+  function closeCmtMenu() { if (cmtMenuEl) { cmtMenuEl.remove(); cmtMenuEl = null; } }
+  function closeCmtPop() { if (cmtPopEl) { cmtPopEl.remove(); cmtPopEl = null; } }
+  function showCmtMenu(x, y, items) {
+    closeCmtMenu(); closeCmtPop();
+    var m = el('div', 'cmt-ctxmenu menu');
+    items.forEach(function (it) {
+      var b = el('button', 'menu-item', it.label); b.type = 'button';
+      b.addEventListener('click', function (ev) { ev.stopPropagation(); closeCmtMenu(); it.fn(); });
+      m.appendChild(b);
+    });
+    document.body.appendChild(m);
+    // 防溢出屏幕
+    var w = m.offsetWidth || 200, h = m.offsetHeight || 80;
+    m.style.left = Math.min(x, window.innerWidth - w - 8) + 'px';
+    m.style.top = Math.min(y, window.innerHeight - h - 8) + 'px';
+    cmtMenuEl = m;
+  }
+  // 文本气泡：opts.onSave(text) / opts.onDelete?()
+  function showCmtPopover(x, y, initial, opts) {
+    closeCmtMenu(); closeCmtPop();
+    var pop = el('div', 'cmt-popover');
+    var ta = el('textarea', 'cmt-pop-input'); ta.value = initial || '';
+    ta.placeholder = '给 AI 的剪辑指令，如：删除后续视频 / 加速50% / 加字幕“你好”';
+    pop.appendChild(ta);
+    var row = el('div', 'cmt-pop-row');
+    var ok = el('button', 'primary', '保存'); ok.type = 'button';
+    var cancel = el('button', null, '取消'); cancel.type = 'button';
+    ok.addEventListener('click', function () { var v = ta.value.trim(); if (v) opts.onSave(v); closeCmtPop(); });
+    cancel.addEventListener('click', closeCmtPop);
+    row.appendChild(ok); row.appendChild(cancel);
+    if (opts.onDelete) { var del = el('button', 'danger', '删除'); del.type = 'button'; del.addEventListener('click', function () { opts.onDelete(); closeCmtPop(); }); row.appendChild(del); }
+    pop.appendChild(row);
+    document.body.appendChild(pop);
+    var w = pop.offsetWidth || 280, h = pop.offsetHeight || 120;
+    pop.style.left = Math.min(x, window.innerWidth - w - 8) + 'px';
+    pop.style.top = Math.min(y, window.innerHeight - h - 8) + 'px';
+    cmtPopEl = pop;
+    ta.focus(); ta.select();
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ok.click(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeCmtPop(); }
+    });
+  }
+  function openTagEditor(tagEl, x, y) {
+    var id = tagEl.dataset.commentId, c = App.getComment ? App.getComment(id) : null; if (!c) return;
+    showCmtPopover(x, y, c.text || '', {
+      onSave: function (text) { App.updateComment(id, { text: text }); },
+      onDelete: function () { App.removeComment(id); }
+    });
+  }
+  function addClipComment(kind, clipId, anchor, x, y) {
+    showCmtPopover(x, y, '', { onSave: function (text) {
+      var o = { scope: 'clip', kind: kind, clipId: clipId, text: text };
+      if (kind === 'point') o.at = anchor.at; else { o.start = anchor.start; o.end = anchor.end; }
+      App.addComment(o);
+    } });
+  }
+  function addGlobalComment(kind, anchor, x, y) {
+    showCmtPopover(x, y, '', { onSave: function (text) {
+      var o = { scope: 'global', kind: kind, text: text };
+      if (kind === 'point') o.at = anchor.at; else { o.start = anchor.start; o.end = anchor.end; }
+      App.addComment(o);
+    } });
+  }
+  function bindCommentInteractions() {
+    function onCtx(e) {
+      var tag = e.target.closest('.cmt-tag');
+      if (tag) { e.preventDefault(); openTagEditor(tag, e.clientX, e.clientY); return; }
+      var clipEl = e.target.closest('.clip');
+      if (clipEl) {
+        e.preventDefault();
+        var cid = clipEl.dataset.clipId;
+        var loc = App.locateClip ? App.locateClip(cid) : null;
+        var atT = clientXToTime(e.clientX);
+        var cs = loc && loc.clip ? loc.clip.start : atT;
+        var ce = loc && loc.clip ? (loc.clip.start + clipDur(loc.clip, loc.track)) : atT + 3;
+        showCmtMenu(e.clientX, e.clientY, [
+          { label: '📍 在此点加评论', fn: function () { addClipComment('point', cid, { at: atT }, e.clientX, e.clientY); } },
+          { label: '⟷ 给本片段加区间评论', fn: function () { addClipComment('range', cid, { start: cs, end: ce }, e.clientX, e.clientY); } }
+        ]);
+        return;
+      }
+      if (e.target.closest('#globalCommentLane') || e.target.closest('#timelineRuler')) {
+        e.preventDefault();
+        var atG = clientXToTime(e.clientX);
+        showCmtMenu(e.clientX, e.clientY, [
+          { label: '📍 在此点加整轨评论', fn: function () { addGlobalComment('point', { at: atG }, e.clientX, e.clientY); } },
+          { label: '⟷ 加整轨区间评论', fn: function () { addGlobalComment('range', { start: atG, end: atG + 3 }, e.clientX, e.clientY); } }
+        ]);
+        return;
+      }
+    }
+    function onClick(e) {
+      if (e.target.closest('.cmt-handle')) return;        // 拖手柄不当作点击
+      var tag = e.target.closest('.cmt-tag'); if (tag) { e.stopPropagation(); openTagEditor(tag, e.clientX, e.clientY); }
+    }
+    // 区间评论标签的边缘手柄：拖拽改 start/end（预览改样式，松手提交）
+    function onHandleDown(e) {
+      var h = e.target.closest('.cmt-handle'); if (!h) return;
+      if (e.button != null && e.button !== 0) return;
+      var tag = h.closest('.cmt-tag'); if (!tag) return;
+      var id = tag.dataset.commentId, c = App.getComment ? App.getComment(id) : null; if (!c || c.kind !== 'range') return;
+      e.preventDefault(); e.stopPropagation();
+      var isLeft = h.classList.contains('left'), start = c.start || 0, end = c.end || (start + 1), ns = start, ne = end;
+      function mv(ev) {
+        var t = clientXToTime(ev.clientX);
+        if (isLeft) { ns = Math.min(Math.max(0, t), end - 0.05); tag.style.left = timeToX(ns) + 'px'; tag.style.width = Math.max(CMT_MIN_W, timeToX(end - ns)) + 'px'; }
+        else { ne = Math.max(t, start + 0.05); tag.style.width = Math.max(CMT_MIN_W, timeToX(ne - start)) + 'px'; }
+      }
+      function up() {
+        document.removeEventListener('pointermove', mv); document.removeEventListener('pointerup', up);
+        App.updateComment(id, isLeft ? { start: ns } : { end: ne });
+      }
+      document.addEventListener('pointermove', mv); document.addEventListener('pointerup', up);
+    }
+    [elArea, elGlobalCmt, elRuler].forEach(function (n) { if (n) { n.addEventListener('contextmenu', onCtx); n.addEventListener('click', onClick); n.addEventListener('pointerdown', onHandleDown); } });
+    document.addEventListener('click', closeCmtMenu);     // 点别处关菜单（气泡不自动关，避免丢输入）
   }
 
   /* =======================================================================
@@ -1134,6 +1264,7 @@
     bindZoom();
     bindAddTrack();
     bindBinDrop();
+    bindCommentInteractions();
     bindShiftCursor();
     // 注意：OS 文件拖入窗口的导入由 app.js 的 bindOsFileDrop 统一处理。
     // 此处不再重复绑定，否则同一次拖放会被两个 window 监听各上传一次 → 素材库出现两条。
