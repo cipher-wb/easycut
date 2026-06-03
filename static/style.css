@@ -948,6 +948,9 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
   background: var(--panel); border-left: 1px solid var(--line);
   display: flex; flex-direction: column; min-height: 0;
 }
+/* 收起：hidden 属性须真正生效（#aiPanel[hidden] 优先级高于上面的 #aiPanel{display:flex}，
+   否则 display:flex 会盖过浏览器默认的 [hidden]{display:none}，面板永远收不起来） */
+#aiPanel[hidden], #aiResizer[hidden] { display: none; }
 #aiHead {
   display: flex; align-items: center; justify-content: space-between;
   padding: 11px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
