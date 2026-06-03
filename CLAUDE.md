@@ -52,6 +52,9 @@ project = {
     clips: [
       // 视频片段：
       { id, mediaId, in, out, start, speed, scale, cx, cy, opacity }
+      // 定格(冻结帧)片段：仍在视频轨，freeze:true，in==out==源帧时刻，
+      //   时间轴长度由 duration 决定（与 in/out 解耦），speed=1，导出时强制静音
+      { id, mediaId, freeze:true, in, out, start, speed:1, duration, scale, cx, cy, opacity }
       // 文字片段：
       { id, content, start, duration, xPct, yPct, wPct, fontFile, fontSizePct,
         color, opacity, align, border, borderColor, borderWPct, box, boxColor, boxOpacity }
@@ -60,7 +63,7 @@ project = {
 }
 ```
 **不变量**（改任何相关代码都要保持一致，否则预览/时间轴/导出会不同步）：
-- 视频片段时间轴长度 `tlLen = (out - in) / speed`；源时间 `sourceTime = in + (时间轴t - start) * speed`。
+- 视频片段时间轴长度 `tlLen = (out - in) / speed`；源时间 `sourceTime = in + (时间轴t - start) * speed`。**定格片段** `tlLen = duration`（freeze:true，预览端把该轨视频钉在 in 帧并暂停；导出端 `trim` 抽一帧 + `tpad=clone` 保持 duration 秒）。
 - 几何全用百分比 / 比例（预览乘显示尺寸、导出乘 output 真实分辨率，二者同比）。
 - 时间轴绝对秒 == 导出输出流时间；drawtext/overlay 用 `enable=between(t, start, start+tlLen)`。
 

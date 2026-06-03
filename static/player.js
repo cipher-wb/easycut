@@ -442,6 +442,20 @@
       // 离线素材(streamId 失效)无可播放源 → 该段留黑, 不请求 /api/stream?id=null (设计 §4.1)
       if (!seg.media || !seg.media.streamId || seg.media.offline) { p.clearMedia(); continue; }
 
+      // 定格片段: 把该轨视频定位到源帧 clip.in 并钉住(暂停 + 不前进), 整段显示同一静止帧。
+      if (seg.clip.freeze) {
+        var ft = seg.clip.in;
+        if (p.curClipId !== seg.clip.id || p.curMediaId !== seg.media.id) {
+          p.curClipId = seg.clip.id;
+          p.setMedia(seg.media, ft, false);              // 换源/seek 到源帧, 不播放
+        } else if (!p.switching) {
+          if (!p.v.paused) { try { p.v.pause(); } catch (e) {} }   // 钉住: 不随主时钟前进
+          if (Math.abs(p.v.currentTime - ft) > this.DRIFT) { p._wantPlay = false; p._safeSeek(ft); }
+        }
+        p.v.style.display = '';
+        continue;
+      }
+
       var spd = (seg.clip.speed || 1);                   // 变速倍率(默认 1)
       // 公式 B: 期望源时刻 = in + (t - start) * speed (video 以 playbackRate 自行前进, 此为源秒域)
       var want = seg.clip.in + (t - seg.clip.start) * spd;

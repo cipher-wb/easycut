@@ -613,6 +613,20 @@ body.shift-edge .clip .clip-trim:hover {
 }
 .clip-speed-badge[hidden] { display: none; }
 
+/* 定格片段：冷色调 + ❄ 标识，与普通视频片段（暖色 + 缩略图）区分 */
+.tb-freeze { position: relative; }
+.clip.freeze-clip {
+  background-image: none !important;
+  background: linear-gradient(180deg, var(--clip-text) 0%, var(--clip-text-b) 100%);
+}
+.clip.freeze-clip .clip-thumb { display: none; }
+.clip-freeze-badge {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  padding: 1px 8px; border-radius: 9px; background: rgba(40,28,16,.55); color: #fff;
+  font-size: 11px; font-weight: 600; line-height: 1.5; white-space: nowrap;
+  pointer-events: none; z-index: 7; text-shadow: 0 1px 2px rgba(0,0,0,.4);
+}
+
 /* 播放头竖线 */
 #playhead {
   position: absolute; top: 0; bottom: 0; left: 0; width: 2px;

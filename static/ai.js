@@ -326,6 +326,26 @@
       run: function (c) { var n = 0; ['width', 'height', 'fps', 'crf', 'keepAudio'].forEach(function (k) { if (c[k] != null) { App.setOutputProp(k, c[k]); n++; } }); return n ? '✓ 已修改输出设置' : '（无可改项）'; }
     },
 
+    freeze: {
+      confirm: false,
+      check: function (c, ctx) {
+        if (!clipResolvable(c.clip, ctx)) return { ok: false, error: '找不到要定格的片段：' + refStr(c.clip) };
+        return { ok: true, summary: '定格' + (c.duration != null ? ' ' + c.duration + 's' : ' 3s') + (c.mode === 'standalone' ? '（独立静止段）' : '（就地插入）') };
+      },
+      run: function (c) {
+        var loc = resolveClipRef(c.clip); if (!loc) return '✗ 找不到片段';
+        var l = App.locateClip(loc.clipId); if (!l) return '✗ 找不到片段';
+        var clip = l.clip, cdur = clip.freeze ? (clip.duration || 0) : ((clip.out - clip.in) / (clip.speed || 1));
+        var at = (c.at != null) ? +c.at : (clip.start + cdur / 2);
+        at = Math.max(clip.start + 0.05, Math.min(clip.start + cdur - 0.05, at));
+        App.selectClip(loc.trackId, loc.clipId);
+        if (App.seek) App.seek(at);
+        var D = (c.duration != null) ? +c.duration : 3;
+        var id = App.freezeAtPlayhead(c.mode === 'standalone' ? 'standalone' : 'inplace', D);
+        return id ? ('✓ 已在 ' + n1(at) + 's 定格 ' + n1(D) + 's') : '✗ 定格失败（位置不合法？）';
+      }
+    },
+
     export: {
       kind: 'action', confirm: false,
       check: function () { var dur = App.totalDuration ? App.totalDuration() : 0; if (!dur) return { ok: false, error: '时间轴为空，没有可导出的内容' }; return { ok: true, summary: '导出视频（将打开导出窗口确认保存位置）' }; },
@@ -406,6 +426,7 @@
 '12. set_track 轨道属性。track | kind | muted/volume(0~1)/hidden/locked/name。',
 '13. set_output 输出设置。width/height/fps/crf/keepAudio。',
 '14. export 导出视频（会打开导出窗口让用户确认保存位置）。无参数。',
+'15. freeze 定格：把某视频片段在某时刻的画面冻结成静止段。clip(必填) | at(时间轴秒，默认片段中点) | duration(秒，默认3) | mode("inplace"就地分割插入[默认] / "standalone"独立静止段)。例：「把 开场 在第10秒定格5秒」=> [{"op":"freeze","clip":"开场","at":10,"duration":5}]。',
 '',
 '【引用方式】',
 '- 片段 clip：可填 "selected"(当前选中) | "last"(你最近添加的) | 素材名(找用了该素材的片段) | {"id":"clip_x"}。',

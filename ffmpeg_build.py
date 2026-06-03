@@ -344,39 +344,65 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
         if bool(track.get("hidden", False)):
             continue  # 隐藏轨不渲染（视频不画）
         cid = clip.get("id")
-        try:
-            cin = float(clip.get("in", 0.0))
-            cout = clip.get("out")
-            cout = float(cout) if cout is not None else None
-        except (TypeError, ValueError):
-            raise ExportValidationError("片段 %s 的 in/out 不是数字" % cid)
         dur_src = media.get("duration")
         try:
             dur_src = float(dur_src) if dur_src not in (None, "", "N/A") else None
         except (TypeError, ValueError):
             dur_src = None
-        if cout is None:
-            cout = dur_src if dur_src else (cin + 1.0)
-        # B4 clamp 到源时长
-        if cin < 0:
-            cin = 0.0
-        if dur_src:
-            if cout > dur_src:
-                cout = dur_src
-            if cin > dur_src:
-                cin = dur_src
-        if not (cout > cin):
-            raise ExportValidationError(
-                "片段 %s 的出点必须大于入点 (in=%s, out=%s)" % (cid, _fmt_num(cin), _fmt_num(cout)))
         try:
             start = float(clip.get("start", 0.0))
         except (TypeError, ValueError):
             start = 0.0
         if start < 0:
             start = 0.0
-        # 变速：tlLen = (out-in)/speed（公式 A）；end / totalDuration 全用 tlLen 累加（贯穿点）。
-        speed = _clampf(clip.get("speed", 1.0), 0.25, 4.0)
-        tl_len = (cout - cin) / speed
+        try:
+            src_fps = float(media.get("fps") or 0) or 30.0
+        except (TypeError, ValueError):
+            src_fps = 30.0
+
+        freeze = bool(clip.get("freeze", False))
+        if freeze:
+            # 定格：源某一帧 T 冻结显示 duration 秒（时间轴长度与 in/out 解耦，强制静音）。
+            try:
+                ft = float(clip.get("freezeAt", clip.get("in", 0.0)))
+            except (TypeError, ValueError):
+                ft = 0.0
+            ft = max(0.0, ft)
+            if dur_src:
+                ft = min(ft, max(0.0, dur_src - 1.0 / src_fps))   # 留 1 帧余量，保证能抽到帧
+            try:
+                fdur = float(clip.get("duration", 3.0))
+            except (TypeError, ValueError):
+                fdur = 3.0
+            if not (fdur > 0):
+                fdur = 3.0
+            cin = cout = ft
+            speed = 1.0
+            tl_len = fdur
+        else:
+            try:
+                cin = float(clip.get("in", 0.0))
+                cout = clip.get("out")
+                cout = float(cout) if cout is not None else None
+            except (TypeError, ValueError):
+                raise ExportValidationError("片段 %s 的 in/out 不是数字" % cid)
+            if cout is None:
+                cout = dur_src if dur_src else (cin + 1.0)
+            # B4 clamp 到源时长
+            if cin < 0:
+                cin = 0.0
+            if dur_src:
+                if cout > dur_src:
+                    cout = dur_src
+                if cin > dur_src:
+                    cin = dur_src
+            if not (cout > cin):
+                raise ExportValidationError(
+                    "片段 %s 的出点必须大于入点 (in=%s, out=%s)" % (cid, _fmt_num(cin), _fmt_num(cout)))
+            # 变速：tlLen = (out-in)/speed（公式 A）；end / totalDuration 全用 tlLen 累加（贯穿点）。
+            speed = _clampf(clip.get("speed", 1.0), 0.25, 4.0)
+            tl_len = (cout - cin) / speed
+
         end = start + tl_len
         if end > total_duration:
             total_duration = end
@@ -391,10 +417,11 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
             "hasAudio": bool(media.get("hasAudio", False)),
             "in": cin, "out": cout, "start": start, "end": end,
             "speed": speed, "tlLen": tl_len,
+            "freeze": freeze, "srcFps": src_fps,
             "clipW": clip_w, "clipH": clip_h, "x": x, "y": y,
             "opacity": opacity,
             "trackIdx": ti, "clipIdx": ci,
-            "muted": bool(track.get("muted", False)),
+            "muted": (True if freeze else bool(track.get("muted", False))),  # 定格段静音
             "trackVolume": _clampf(track.get("volume", 1.0), 0.0, 1.0),
         })
 
@@ -501,20 +528,34 @@ def _build_video_chains(norm):
     n = 0
     for v in norm["video_clips"]:
         vlab = "v_%d_%d" % (v["trackIdx"], v["clipIdx"])
-        # 变速：speed≠1 时 setpts=(PTS-STARTPTS)/speed+start/TB（源 out-in 拉伸/压缩为 tlLen 再平移）；
-        # speed==1 退回 v2 原写法（零回归）。overlay enable 的 end 已按 tlLen 算好，无需改。
-        speed = v.get("speed", 1.0)
-        if abs(speed - 1.0) < 1e-9:
-            setpts = "setpts=PTS-STARTPTS+%s/TB" % _fmt_num(v["start"])
+        if v.get("freeze"):
+            # 定格：抽源 T 处一帧 → tpad 克隆该帧填满 D 秒 → 平移到时间轴 start。
+            # 实际流略长于 D，无妨：overlay 的 enable=between(start,start+D) 把可见窗口钉在 D。
+            T = v["in"]
+            fps_src = v.get("srcFps") or 30.0
+            slice_len = max(0.08, 2.0 / fps_src)         # 至少覆盖一帧
+            chain = (
+                "[%d:v]trim=start=%s:end=%s,setpts=PTS-STARTPTS,fps=%d,"
+                "tpad=stop_mode=clone:stop_duration=%s,scale=%d:%d,setsar=1,"
+                "setpts=PTS-STARTPTS+%s/TB"
+                % (v["streamIdx"], _fmt_num(T), _fmt_num(T + slice_len), FPS,
+                   _fmt_num(v["tlLen"]), v["clipW"], v["clipH"], _fmt_num(v["start"]))
+            )
         else:
-            setpts = "setpts=(PTS-STARTPTS)/%s+%s/TB" % (_fmt_num(speed), _fmt_num(v["start"]))
-        chain = (
-            "[%d:v]trim=start=%s:end=%s,"
-            "%s,"
-            "scale=%d:%d,setsar=1"
-            % (v["streamIdx"], _fmt_num(v["in"]), _fmt_num(v["out"]),
-               setpts, v["clipW"], v["clipH"])
-        )
+            # 变速：speed≠1 时 setpts=(PTS-STARTPTS)/speed+start/TB（源 out-in 拉伸/压缩为 tlLen 再平移）；
+            # speed==1 退回 v2 原写法（零回归）。overlay enable 的 end 已按 tlLen 算好，无需改。
+            speed = v.get("speed", 1.0)
+            if abs(speed - 1.0) < 1e-9:
+                setpts = "setpts=PTS-STARTPTS+%s/TB" % _fmt_num(v["start"])
+            else:
+                setpts = "setpts=(PTS-STARTPTS)/%s+%s/TB" % (_fmt_num(speed), _fmt_num(v["start"]))
+            chain = (
+                "[%d:v]trim=start=%s:end=%s,"
+                "%s,"
+                "scale=%d:%d,setsar=1"
+                % (v["streamIdx"], _fmt_num(v["in"]), _fmt_num(v["out"]),
+                   setpts, v["clipW"], v["clipH"])
+            )
         if v["opacity"] < 1.0:
             chain += ",format=yuva420p,colorchannelmixer=aa=%s" % _fmt_num(v["opacity"])
         lines.append(chain + "[%s]" % vlab)

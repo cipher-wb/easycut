@@ -35,6 +35,14 @@
       <button id="btnRippleDelete" type="button" disabled title="波纹删除：删除并把同轨后续片段前移补缝 (Backspace)">⟲ 波纹删除</button>
     </div>
     <div class="tb-sep"></div>
+    <div class="tb-group tb-freeze">
+      <button id="btnFreeze" type="button" disabled title="定格：把视频某一帧拉长成静止画面（讲解 / 加字幕用）">❄ 定格 ▾</button>
+      <div id="freezeMenu" class="menu" hidden>
+        <button type="button" class="menu-item" data-mode="inplace">就地定格（在播放头切开并插入）</button>
+        <button type="button" class="menu-item" data-mode="standalone">生成独立静止片段</button>
+      </div>
+    </div>
+    <div class="tb-sep"></div>
     <div class="tb-group">
       <button id="btnUndo" type="button" disabled title="撤销 (Ctrl+Z)">↶ 撤销</button>
       <button id="btnRedo" type="button" disabled title="重做 (Ctrl+Shift+Z / Ctrl+Y)">↷ 重做</button>
@@ -130,6 +138,19 @@
       <div id="propClipSection" class="prop-section" hidden>
         <h3 class="prop-h">视频片段（画中画）</h3>
 
+        <!-- 定格片段专属：显示时长 + 源帧时刻（仅 freeze 片段可见） -->
+        <fieldset class="group freeze-only" id="fsFreeze" hidden>
+          <legend>❄ 定格（静止帧）</legend>
+          <label class="field">
+            <span>显示时长（秒，可拖片段边缘调整）</span>
+            <input type="number" id="numFreezeDuration" min="0.04" step="0.1" class="num-sm" />
+          </label>
+          <label class="field">
+            <span>定格的源帧时刻（秒）</span>
+            <input type="number" id="numFreezeAt" min="0" step="0.04" class="num-sm" />
+          </label>
+        </fieldset>
+
         <label class="field">
           <span>缩放（占画布宽度比例 %）</span>
           <div class="row">
@@ -155,7 +176,7 @@
           <input type="range" id="rngClipOpacity" min="0" max="1" step="0.01" />
         </label>
 
-        <label class="field">
+        <label class="field video-only" id="rowClipSpeed">
           <span>倍率（变速，0.25× – 4×）</span>
           <div class="row">
             <input type="range" id="rngSpeed" min="0.25" max="4" step="0.05" />
@@ -170,7 +191,7 @@
           <button type="button" id="btnClipFull" class="mini">铺满</button>
         </div>
 
-        <fieldset class="group">
+        <fieldset class="group video-only" id="fsClipTrim">
           <legend>裁剪 / 位置（秒）</legend>
           <div class="row two">
             <label class="field">

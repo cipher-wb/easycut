@@ -209,6 +209,7 @@
   };
 
   function clipDur(clip, track) {
+    if (clip.freeze) return clip.duration || 0;   // 定格片段：时间轴长度 = duration，独立于 in/out
     if (track.kind === 'text') return clip.duration || 0;
     // 公式 A（speed_design.md §0.2）：视频片段时间轴长度 = (out - in) / speed。
     return (clip.out - clip.in) / (clip.speed || 1);
@@ -231,8 +232,8 @@
           var clip = track.clips[ci];
           var media = mediaById.get(clip.mediaId);
           if (!media) continue;
-          // 公式 A：视频段时间轴长度 = (out-in)/speed（tEnd/total/trackDur 随之正确，总时长贯穿点）。
-          var dur = (clip.out - clip.in) / (clip.speed || 1);
+          // 公式 A：视频段时间轴长度 = (out-in)/speed；定格段 = duration（贯穿点）。
+          var dur = clip.freeze ? (clip.duration || 0) : (clip.out - clip.in) / (clip.speed || 1);
           if (!(dur > 0)) continue;
           var tStart = clip.start, tEnd = clip.start + dur;
           var seg = { clip: clip, media: media, tStart: tStart, tEnd: tEnd, dur: dur };
@@ -636,7 +637,7 @@
   }
 
   // 在时间轴绝对秒 atSec 切分（video 或 text）。返回 [leftId, rightId] 或 null。
-  function splitClip(trackId, clipId, atSec) {
+  function splitClip(trackId, clipId, atSec, opts) {
     var track = getTrack(trackId); if (!track) return null;
     if (track.locked) { toast('该轨道已锁定', 'error'); return null; }
     var clip = getClipIn(trackId, clipId); if (!clip) return null;
@@ -646,11 +647,19 @@
     var MIN = MIN_CLIP();
     if (leftLen < MIN || rightLen < MIN) { toast('切分位置过于靠近端点（两侧需 ≥ ' + MIN.toFixed(2) + ' 秒）', 'error'); return null; }
 
-    pushHistory();
+    if (!opts || !opts.noHistory) pushHistory();
     var idx = track.clips.indexOf(clip);
     var rightId = (track.kind === 'video') ? nextId('clip') : nextId('txt');
     var right;
-    if (track.kind === 'video') {
+    if (clip.freeze) {
+      // 定格段切两半：同一源帧，时长按切点分配
+      right = {
+        id: rightId, mediaId: clip.mediaId, in: clip.in, out: clip.out, start: atSec,
+        speed: 1, freeze: true, duration: rightLen,
+        scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity
+      };
+      clip.duration = leftLen;
+    } else if (track.kind === 'video') {
       // 公式 4（speed_design.md §0.4）：leftLen 已是时间轴长度（clipDur 含 speed），
       // 源切点 srcCut = in + leftLen*speed；左右两段沿用同一 speed，时间轴长度自然相加 = 原长。
       var srcCut = clip.in + leftLen * (clip.speed || 1);
@@ -740,11 +749,13 @@
     if (track.locked) { toast('该轨道已锁定', 'error'); return; }
     var clip = getClipIn(trackId, clipId); if (!clip) return;
     var MIN = MIN_CLIP();
-    var media = (track.kind === 'video') ? getMedia(clip.mediaId) : null;
+    // 定格片段虽在视频轨，但拖边缘改的是 start/duration（与文字片段同构），不裁源 in/out。
+    var textLike = (track.kind !== 'video') || clip.freeze;
+    var media = (!textLike) ? getMedia(clip.mediaId) : null;
 
     if (!opts.noHistory) pushHistory();
 
-    if (track.kind === 'video') {
+    if (!textLike) {
       var sp = (clip.speed || 1);   // 变速：deltaSec 为“源秒”增量；时间轴长 = 源长/sp
       if (edge === 'in') {
         // 改源 in 与时间轴 start：in_new=in+Δ(源)，start_new=start+Δ/sp(时间轴)
@@ -829,6 +840,107 @@
     if (!opts.noHistory) pushHistory();
     clip.speed = v;
     changed('setClipSpeed');
+    bus.emit('clips:changed', { trackId: trackId });
+  }
+
+  /* ===================================================================== *
+   * 14.1 定格 / 冻结帧（freeze frame）
+   *   定格片段 = 视频轨上的视频片段，freeze:true，in==out==源帧时刻，
+   *   时间轴长度由 duration 决定（与文字片段同构），默认静音（导出时跳过音频）。
+   * ===================================================================== */
+  // 直接构造一个定格片段并落到轨道（绕过 addClipFromMedia 的 out>=in+MIN 钳制）。
+  function createFreezeClip(trackId, startSec, mediaId, freezeAt, duration, opts) {
+    opts = opts || {};
+    var media = getMedia(mediaId); if (!media) { toast('素材不存在', 'error'); return null; }
+    var track = getTrack(trackId);
+    if (!track || track.kind !== 'video') { toast('请放到视频轨', 'error'); return null; }
+    if (track.locked) { toast('该轨道已锁定', 'error'); return null; }
+    var maxT = media.duration || num(freezeAt, 0);
+    var T = clamp(num(freezeAt, 0), 0, maxT);
+    var D = Math.max(MIN_CLIP(), num(duration, 3));
+    var placed = resolveOverlap(track, null, Math.max(0, num(startSec, 0)), D);
+    if (placed == null) { toast('该轨道没有足够空位放置定格', 'error'); return null; }
+    var tf = defaultTransform(media.width, media.height, project.output.width, project.output.height);
+    var clip = {
+      id: nextId('clip'), mediaId: mediaId,
+      in: T, out: T, start: placed, speed: 1,
+      freeze: true, duration: D,
+      scale: num(opts.scale, tf.scale), cx: num(opts.cx, tf.cx), cy: num(opts.cy, tf.cy),
+      opacity: clamp01(num(opts.opacity, tf.opacity))
+    };
+    if (!opts.noHistory) pushHistory();
+    track.clips.push(clip);
+    changed('freeze');
+    bus.emit('clips:changed', { trackId: trackId });
+    return clip.id;
+  }
+
+  // 在播放头处对“当前选中（或播放头下方最上层）视频片段”定格。
+  // mode: 'inplace'（剪映式：分割+同轨右移，插入定格） | 'standalone'（独立静止段，落播放头处空位）。
+  function freezeAtPlayhead(mode, durationOpt) {
+    mode = (mode === 'standalone') ? 'standalone' : 'inplace';
+    var loc = null;
+    var sel = getSelection();
+    if (sel && sel.clipId) { var l = locateClip(sel.clipId); if (l && l.track.kind === 'video' && !l.clip.freeze) loc = l; }
+    var P = getPlayhead();
+    if (!loc) {                                   // 回退：播放头下方最上层非定格视频片段
+      for (var i = project.tracks.length - 1; i >= 0 && !loc; i--) {
+        var tk = project.tracks[i]; if (tk.kind !== 'video') continue;
+        for (var j = 0; j < tk.clips.length; j++) {
+          var cc = tk.clips[j]; if (cc.freeze) continue;
+          var dd = clipDur(cc, tk);
+          if (P >= cc.start - 1e-6 && P <= cc.start + dd + 1e-6) { loc = { track: tk, clip: cc }; break; }
+        }
+      }
+    }
+    if (!loc) { toast('请先选中一个视频片段，并把播放头停在它上面', 'error'); return null; }
+    var clip = loc.clip, track = loc.track;
+    if (track.locked) { toast('该轨道已锁定', 'error'); return null; }
+    var dur = clipDur(clip, track);
+    if (P < clip.start - 1e-6 || P > clip.start + dur + 1e-6) { toast('请把播放头移到该片段上再定格', 'error'); return null; }
+    var T = clip.in + (P - clip.start) * (clip.speed || 1);   // 源帧时刻
+    var D = Math.max(MIN_CLIP(), num(durationOpt, 3));
+
+    if (mode === 'standalone') {
+      pushHistory();
+      var sid = createFreezeClip(track.id, P, clip.mediaId, T, D,
+        { noHistory: true, scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity });
+      if (sid) { selectClip(track.id, sid); bus.emit('selection:changed', getSelection()); }
+      return sid;
+    }
+
+    // inplace：一次撤销步内 = 在 P 切开（如可）+ 同轨 start>=P 的片段整体右移 D + 插入定格
+    pushHistory();
+    var MIN = MIN_CLIP();
+    if ((P - clip.start) >= MIN && (clip.start + dur - P) >= MIN) {
+      splitClip(track.id, clip.id, P, { noHistory: true });
+    }
+    track.clips.forEach(function (c2) { if (c2.start >= P - 1e-6) c2.start += D; });   // 腾出 [P, P+D]
+    var fid = createFreezeClip(track.id, P, clip.mediaId, T, D,
+      { noHistory: true, scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity });
+    if (fid) { selectClip(track.id, fid); bus.emit('selection:changed', getSelection()); }
+    return fid;
+  }
+
+  // 属性面板改定格片段的 时长 / 源帧时刻。patch {duration?, freezeAt?}
+  function setFreezeProp(trackId, clipId, patch, opts) {
+    opts = opts || {};
+    var track = getTrack(trackId); if (!track) return;
+    var clip = getClipIn(trackId, clipId); if (!clip || !clip.freeze) return;
+    if (!opts.noHistory) pushHistory();
+    if (patch.duration != null) {
+      var d = Math.max(MIN_CLIP(), num(patch.duration, clip.duration));
+      var nx = nextClipStart(track, clip);                 // 不得越过下一片段
+      if (nx != null) d = Math.min(d, nx - clip.start);
+      clip.duration = Math.max(MIN_CLIP(), d);
+    }
+    if (patch.freezeAt != null) {
+      var media = getMedia(clip.mediaId);
+      var mx = media ? (media.duration || clip.in) : clip.in;
+      var t = clamp(num(patch.freezeAt, clip.in), 0, mx);
+      clip.in = clip.out = t;
+    }
+    changed('setFreeze');
     bus.emit('clips:changed', { trackId: trackId });
   }
 
@@ -1279,6 +1391,8 @@
       rngSpeed: $('rngSpeed'), numSpeed: $('propSpeed'),
       btnContain: $('btnClipContain'), btnCover: $('btnClipCover'), btnFull: $('btnClipFull'),
       numIn: $('numClipIn'), numOut: $('numClipOut'), numStart: $('numClipStart'),
+      freezeDur: $('numFreezeDuration'), freezeAt: $('numFreezeAt'),
+      fsFreeze: $('fsFreeze'), rowSpeed: $('rowClipSpeed'), fsTrim: $('fsClipTrim'),
       chkTrackMuted: $('chkTrackMuted'), rngTrackVolume: $('rngTrackVolume'),
       // text
       content: $('inpTextContent'),
@@ -1368,6 +1482,15 @@
     if (P.numStart) P.numStart.addEventListener('change', function () {
       var c = curClip(); if (!c) return;
       moveClip(selection.trackId, selection.clipId, num(P.numStart.value, c.start), null);
+    });
+    // 定格片段：时长 / 源帧时刻
+    if (P.freezeDur) P.freezeDur.addEventListener('change', function () {
+      var c = curClip(); if (!c || !c.freeze) return;
+      setFreezeProp(selection.trackId, selection.clipId, { duration: num(P.freezeDur.value, c.duration) });
+    });
+    if (P.freezeAt) P.freezeAt.addEventListener('change', function () {
+      var c = curClip(); if (!c || !c.freeze) return;
+      setFreezeProp(selection.trackId, selection.clipId, { freezeAt: num(P.freezeAt.value, c.in) });
     });
     if (P.chkTrackMuted) P.chkTrackMuted.addEventListener('change', function () { var c = curClip(); if (!c) return; setTrackProp(selection.trackId, 'muted', P.chkTrackMuted.checked); });
     if (P.rngTrackVolume) {
@@ -1476,12 +1599,22 @@
     if (P.numCx) P.numCx.value = (+c.cx).toFixed(3);
     if (P.numCy) P.numCy.value = (+c.cy).toFixed(3);
     if (P.rngOpacity) P.rngOpacity.value = c.opacity;
-    var sp = (c.speed == null ? 1 : c.speed);
-    if (P.rngSpeed) P.rngSpeed.value = sp;
-    if (P.numSpeed) P.numSpeed.value = (+sp).toFixed(2);
-    if (P.numIn) P.numIn.value = (+c.in).toFixed(2);
-    if (P.numOut) P.numOut.value = (+c.out).toFixed(2);
-    if (P.numStart) P.numStart.value = (+c.start).toFixed(2);
+    // 定格片段：显示「时长 + 源帧时刻」，隐藏「倍率 / 裁剪 in-out」（其余画中画变换照常）
+    var isFreeze = !!c.freeze;
+    showSec(P.fsFreeze, isFreeze);
+    showSec(P.rowSpeed, !isFreeze);
+    showSec(P.fsTrim, !isFreeze);
+    if (isFreeze) {
+      if (P.freezeDur) P.freezeDur.value = (+c.duration).toFixed(2);
+      if (P.freezeAt) P.freezeAt.value = (+c.in).toFixed(2);
+    } else {
+      var sp = (c.speed == null ? 1 : c.speed);
+      if (P.rngSpeed) P.rngSpeed.value = sp;
+      if (P.numSpeed) P.numSpeed.value = (+sp).toFixed(2);
+      if (P.numIn) P.numIn.value = (+c.in).toFixed(2);
+      if (P.numOut) P.numOut.value = (+c.out).toFixed(2);
+      if (P.numStart) P.numStart.value = (+c.start).toFixed(2);
+    }
     var t = getTrack(selection.trackId);
     if (t) { if (P.chkTrackMuted) P.chkTrackMuted.checked = !!t.muted; if (P.rngTrackVolume) P.rngTrackVolume.value = t.volume == null ? 1 : t.volume; }
   }
@@ -1602,6 +1735,22 @@
       rippleRemoveClip(selection.trackId, selection.clipId);
     });
 
+    // 定格下拉：就地定格 / 生成独立静止片段
+    var bfreeze = $('btnFreeze'), fmenu = $('freezeMenu');
+    if (bfreeze) bfreeze.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (fmenu) { var open = (fmenu.hidden === false); fmenu.hidden = open; fmenu.classList.toggle('open', !open); }
+      else freezeAtPlayhead('inplace');
+    });
+    if (fmenu) {
+      fmenu.addEventListener('click', function (e) {
+        var item = e.target.closest('[data-mode]'); if (!item) return;
+        freezeAtPlayhead(item.dataset.mode === 'standalone' ? 'standalone' : 'inplace');
+        fmenu.hidden = true; fmenu.classList.remove('open');
+      });
+      document.addEventListener('click', function () { fmenu.hidden = true; fmenu.classList.remove('open'); });
+    }
+
     var bu = $('btnUndo'); if (bu) bu.addEventListener('click', function () { undo(); });
     var br = $('btnRedo'); if (br) br.addEventListener('click', function () { redo(); });
     var bp = $('btnPlayPause'); if (bp) bp.addEventListener('click', function () { togglePlay(); });
@@ -1637,7 +1786,7 @@
   function refreshButtonStates() {
     var has = totalDuration() > 0;
     var noSel = !(selection && selection.clipId);
-    [['btnExport', !has], ['btnPlayPause', !has],
+    [['btnExport', !has], ['btnPlayPause', !has], ['btnFreeze', !has],
      ['btnSplit', !has], ['btnTlSplit', noSel],
      ['btnDeleteClip', noSel], ['btnTlDelete', noSel],
      ['btnRippleDelete', noSel], ['btnTlRipple', noSel],
@@ -1927,6 +2076,7 @@
     rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip,
     setClipTransform: setClipTransform, setClipSpeed: setClipSpeed, getClip: getClip,
     duplicateClip: duplicateClip, copyClip: copyClip, pasteClip: pasteClip,
+    createFreezeClip: createFreezeClip, freezeAtPlayhead: freezeAtPlayhead, setFreezeProp: setFreezeProp,
 
     // 文字片段
     addTextClip: addTextClip, setTextProp: setTextProp,
