@@ -955,6 +955,12 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
   display: flex; align-items: center; justify-content: space-between;
   padding: 11px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
 }
+#aiCommentBar {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+}
+#aiCommentCount { font-size: 12px; color: var(--text-dim); }
+#btnRunComments { font-size: 12px; padding: 5px 10px; }
 #aiHead .ai-title {
   font-family: "Noto Serif SC", "Songti SC", serif;
   font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: .5px;

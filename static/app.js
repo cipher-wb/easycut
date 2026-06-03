@@ -687,13 +687,13 @@
     return [clip.id, rightId];
   }
 
-  function removeClip(trackId, clipId) {
+  function removeClip(trackId, clipId, opts) {
     var track = getTrack(trackId); if (!track) return;
     if (track.locked) { toast('该轨道已锁定', 'error'); return; }
     var idx = -1;
     for (var i = 0; i < track.clips.length; i++) if (track.clips[i].id === clipId) { idx = i; break; }
     if (idx < 0) return;
-    pushHistory();
+    if (!(opts && opts.noHistory)) pushHistory();
     track.clips.splice(idx, 1);
     if (selection && selection.clipId === clipId) selection = null;
     changed('removeClip');
@@ -702,11 +702,11 @@
   }
 
   // 波纹删除：删除并把同轨 start > 被删start 的片段整体前移其时长（contract_v2 §6.6）
-  function rippleRemoveClip(trackId, clipId) {
+  function rippleRemoveClip(trackId, clipId, opts) {
     var track = getTrack(trackId); if (!track) return;
     if (track.locked) { toast('该轨道已锁定', 'error'); return; }
     var clip = getClipIn(trackId, clipId); if (!clip) return;
-    pushHistory();
+    if (!(opts && opts.noHistory)) pushHistory();
     var gap = clipDur(clip, track);
     var removeStart = clip.start;
     var idx = track.clips.indexOf(clip);
@@ -749,7 +749,7 @@
 
   // 删除空隙（仅本轨）：把 atSec 落入的那段空白消除——空白右侧的片段（及其后所有片段）
   // 整体左移，紧贴空白左侧片段的末尾（轨首的空白则贴到 0）。一次撤销步。
-  function closeGap(trackId, atSec) {
+  function closeGap(trackId, atSec, opts) {
     var track = getTrack(trackId); if (!track) return false;
     if (track.locked) { toast('该轨道已锁定', 'error'); return false; }
     atSec = Math.max(0, num(atSec, 0));
@@ -762,7 +762,7 @@
     if (nextStart == null) { toast('这里后面没有片段，没有空隙可删', null, 1600); return false; }
     var shift = nextStart - gapStart;
     if (shift <= 1e-6) { toast('这里没有空隙', null, 1400); return false; }
-    pushHistory();
+    if (!(opts && opts.noHistory)) pushHistory();
     track.clips.forEach(function (c) { if (c.start >= nextStart - 1e-6) c.start = Math.max(0, c.start - shift); });
     changed('closeGap');
     bus.emit('clips:changed', { trackId: trackId });
@@ -1058,7 +1058,7 @@
   // 在指定 text 轨（缺省：当前选中 text 轨；无则新建）新建文字片段。
   // 先确定目标轨（含必要的新建），全部确定无误后再 pushHistory 一次并改状态，
   // 避免“先改/新建轨再 pop 快照却回滚不掉”的脆弱逻辑（contract_v2 §6.8）。
-  function addTextClip(trackId, startSec) {
+  function addTextClip(trackId, startSec, opts) {
     var track = trackId ? getTrack(trackId) : null;
     if (!track || track.kind !== 'text') {
       track = null;
@@ -1076,7 +1076,8 @@
 
     // 此处起开始改状态：先压一次历史，再做（可能的）新建轨 + 追加文字片段，
     // 一次手势=一个撤销步；undo 一次可同时回退“新建轨+加文字”。
-    pushHistory();
+    // opts.noHistory：批量执行（评论/多步指令）时由上层统一压一次历史。
+    if (!(opts && opts.noHistory)) pushHistory();
     if (needNewTrack) {
       var n = 1; project.tracks.forEach(function (t) { if (t.kind === 'text') n++; });
       track = makeTrack('text', '文字 ' + n);
@@ -1127,13 +1128,13 @@
    * 16. 输出设置（contract_v2 §3.2 输出）
    * ===================================================================== */
   var _outputUserTouched = false;
-  function setOutputProp(key, value) {
+  function setOutputProp(key, value, opts) {
     if (['width', 'height', 'fps', 'crf', 'keepAudio'].indexOf(key) < 0) return;
     if (key === 'width' || key === 'height') value = toEven(num(value, 2));
     else if (key === 'fps') value = clamp(Math.round(num(value, 30)), 1, 120);
     else if (key === 'crf') value = clamp(Math.round(num(value, 18)), 0, 51);
     else if (key === 'keepAudio') value = !!value;
-    pushHistory();
+    if (!(opts && opts.noHistory)) pushHistory();
     project.output[key] = value;
     if (key !== 'keepAudio') _outputUserTouched = true;
     changed('setOutputProp');

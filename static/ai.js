@@ -235,7 +235,7 @@
         if (c.at == null) return { ok: false, error: 'split_clip 需要 at（时间轴秒）' };
         return { ok: true, summary: '在 ' + n1(+c.at) + 's 处分割片段' };
       },
-      run: function (c) { var loc = resolveClipRef(c.clip); var r = App.splitClip(loc.trackId, loc.clipId, +c.at); return r ? '✓ 已在 ' + n1(+c.at) + 's 分割' : '✗ 该位置无法分割'; }
+      run: function (c, opts) { var loc = resolveClipRef(c.clip); var r = App.splitClip(loc.trackId, loc.clipId, +c.at, { noHistory: !!(opts && opts.noHistory) }); return r ? '✓ 已在 ' + n1(+c.at) + 's 分割' : '✗ 该位置无法分割'; }
     },
 
     close_gap: {
@@ -245,14 +245,15 @@
         if (c.track != null && c.at != null) return { ok: true, summary: '删除空隙' };
         return { ok: false, error: 'close_gap 需要 clip，或 track + at' };
       },
-      run: function (c) {
+      run: function (c, opts) {
+        var o = { noHistory: !!(opts && opts.noHistory) };
         if (c.clip != null) {
           var loc = resolveClipRef(c.clip); if (!loc) return '✗ 找不到片段';
           var l = App.locateClip(loc.clipId); if (!l) return '✗ 找不到片段';
-          return App.closeGap(loc.trackId, l.clip.start - 0.001) ? '✓ 已删除空隙' : '（该片段前没有空隙）';
+          return App.closeGap(loc.trackId, l.clip.start - 0.001, o) ? '✓ 已删除空隙' : '（该片段前没有空隙）';
         }
         var tid = resolveTrackId(c.track, 'video');
-        return (tid && App.closeGap(tid, +c.at)) ? '✓ 已删除空隙' : '✗ 未找到可删的空隙';
+        return (tid && App.closeGap(tid, +c.at, o)) ? '✓ 已删除空隙' : '✗ 未找到可删的空隙';
       }
     },
 
@@ -273,7 +274,7 @@
     delete_clip: {
       confirm: true,
       check: function (c, ctx) { if (!clipResolvable(c.clip, ctx)) return { ok: false, error: '找不到要删除的片段：' + refStr(c.clip) }; return { ok: true, summary: (c.ripple ? '波纹删除' : '删除') + '片段 ' + refStr(c.clip) }; },
-      run: function (c) { var loc = resolveClipRef(c.clip); if (c.ripple) App.rippleRemoveClip(loc.trackId, loc.clipId); else App.removeClip(loc.trackId, loc.clipId); return '✓ 已删除片段'; }
+      run: function (c, opts) { var loc = resolveClipRef(c.clip), o = { noHistory: !!(opts && opts.noHistory) }; if (c.ripple) App.rippleRemoveClip(loc.trackId, loc.clipId, o); else App.removeClip(loc.trackId, loc.clipId, o); return '✓ 已删除片段'; }
     },
 
     add_text: {
@@ -283,13 +284,14 @@
         if (c.during != null && !clipResolvable(c.during, ctx)) return { ok: false, error: '找不到 during 指向的片段：' + refStr(c.during) + '（请确认它已在时间轴上，或本批前面有把它放进时间轴的 add_clip）' };
         return { ok: true, summary: '添加文字"' + String(c.content).slice(0, 12) + '"' + (c.position ? '（' + c.position + '）' : '') };
       },
-      run: function (c) {
+      run: function (c, opts) {
+        var nh = !!(opts && opts.noHistory);
         var start = 0, dur = c.duration != null ? +c.duration : 3;
         if (c.during != null) { var loc = resolveClipRef(c.during), sp = loc && clipSpan(loc.clipId); if (sp) { start = sp.tStart; dur = Math.max(0.5, sp.tEnd - sp.tStart); } }
         else if (c.start != null) start = +c.start;
         else start = App.getPlayhead ? App.getPlayhead() : 0;
         var trackId = c.track ? resolveTrackId(c.track, 'text') : null;
-        var id = App.addTextClip(trackId, start);
+        var id = App.addTextClip(trackId, start, { noHistory: nh });
         if (!id) return '✗ 无法添加文字';
         lastClipId = id; var l = App.locateClip(id), tid = l.track.id;
         var set = function (k, v) { App.setTextProp(tid, id, k, v, { noHistory: true }); };
@@ -341,7 +343,7 @@
     set_output: {
       confirm: false,
       check: function () { return { ok: true, summary: '修改输出设置' }; },
-      run: function (c) { var n = 0; ['width', 'height', 'fps', 'crf', 'keepAudio'].forEach(function (k) { if (c[k] != null) { App.setOutputProp(k, c[k]); n++; } }); return n ? '✓ 已修改输出设置' : '（无可改项）'; }
+      run: function (c, opts) { var o = { noHistory: !!(opts && opts.noHistory) }, n = 0; ['width', 'height', 'fps', 'crf', 'keepAudio'].forEach(function (k) { if (c[k] != null) { App.setOutputProp(k, c[k], o); n++; } }); return n ? '✓ 已修改输出设置' : '（无可改项）'; }
     },
 
     freeze: {
@@ -520,6 +522,94 @@ stateSnapshot()
     step();
   }
 
+  /* ===================== 执行时间轴批注（评论 → AI 剪辑） ===================== */
+  // 汇总待执行评论为结构化上下文（每条带锚点：片段 clipId+时间 / 整轨时间）
+  function buildCommentsContext() {
+    var pend = (App.getComments ? App.getComments() : []).filter(function (c) { return c.status === 'pending'; });
+    if (!pend.length) return null;
+    var lines = pend.map(function (c) {
+      var loc;
+      if (c.scope === 'global') {
+        loc = (c.kind === 'point') ? ('整轨/全局 第' + n1(c.at) + 's') : ('整轨/全局 区间[' + n1(c.start) + 's~' + n1(c.end) + 's]');
+      } else {
+        var l = App.locateClip ? App.locateClip(c.clipId) : null;
+        var m = l ? App.getMedia(l.clip.mediaId) : null;
+        var nm = m ? ('"' + m.name + '"') : '片段';
+        loc = '片段 ' + nm + '(clipId=' + c.clipId + ') ' + (c.kind === 'point' ? ('第' + n1(c.at) + 's') : ('区间[' + n1(c.start) + 's~' + n1(c.end) + 's]'));
+      }
+      return '  - [' + c.id + '] ' + loc + '：' + c.text;
+    }).join('\n');
+    return { pending: pend, text: lines };
+  }
+
+  var COMMENT_EXEC = [
+    '',
+    '【任务：执行时间轴批注】上面每条是用户在时间轴上贴的"批注"（导演式剪辑指令），带锚点：',
+    '某片段(clipId + 时间点/区间) 或 整轨/全局(时间点/区间)。请把每条转成命中其锚点的剪辑 op：',
+    '- 片段引用一律用 {"id":"<clipId>"}（用上面给的 clipId），at/start/end 用批注给的时间轴秒。',
+    '- 例：点"删除后续视频" => split_clip{clip,at} + delete_clip{clip:右段,ripple:true}；',
+    '  区间"加速50%" => 用 split_clip 在区间两端切出中段，再 set_speed{clip:中段,speed:1.5}；',
+    '  整轨区间"放一行字X" => add_text{content:X,start,duration=区间时长,position}。',
+    '仍只输出一个 JSON 对象，但多加 done 字段（已成功转成操作的批注 id 数组）：',
+    '{ "say":"先用一句话说明你将怎么做", "commands":[...], "done":["cmt_x", ...] }。',
+    '看不懂/做不了的批注不要硬来：不放进 done，并在 say 里说明。'
+  ].join('\n');
+
+  function executeComments() {
+    if (pending) return;
+    var ctx = buildCommentsContext();
+    if (!ctx) { App.toast && App.toast('没有待执行的批注', null, 1600); return; }
+    if (elPanel && elPanel.hidden) setOpen(true);
+    pending = true; setBusy(true);
+    addMsg('user', '【执行时间轴批注】\n' + ctx.text); persistChat();
+    var system = buildSystemPrompt();
+    var thinking = addMsg('think', '正在理解批注…');
+    var attempt = 0, rawLast = '', lastErr = null;
+
+    function step() {
+      var out = [{ role: 'user', content: ctx.text + '\n' + COMMENT_EXEC }];
+      if (lastErr) { out.push({ role: 'assistant', content: rawLast }); out.push({ role: 'user', content: '刚才的输出有问题：' + lastErr + '\n请只重新输出修正后的 JSON（{"say":...,"commands":[...],"done":[...]}）。' }); }
+      postAI('/api/ai', { system: system, messages: out }).then(function (r) {
+        rawLast = r.content || '';
+        var parsed = extractJSON(rawLast);
+        if (!parsed) return retryOrFail('返回的不是合法 JSON 对象');
+        var cmds = parsed.commands || [];
+        var check = validateAll(cmds);
+        if (!check.ok) return retryOrFail(check.errors.join('；'));
+        removeMsg(thinking);
+        addMsg('assistant', parsed.say || '我将按批注执行以下操作：'); persistChat();
+        var doneIds = (Array.isArray(parsed.done) && parsed.done.length) ? parsed.done : ctx.pending.map(function (c) { return c.id; });
+        if (!cmds.length) { addMsg('note', '（没有可执行的操作）'); return finish(); }
+        confirmPlan(check.summaries).then(function (ok) {   // 总是先列计划再确认
+          if (!ok) { addMsg('note', '已取消执行批注。'); return finish(); }
+          var edits = cmds.filter(function (c) { return OPS[c.op] && OPS[c.op].kind !== 'action'; });
+          var actions = cmds.filter(function (c) { return OPS[c.op] && OPS[c.op].kind === 'action'; });
+          var results = [];
+          App.pushHistory();   // 整批（编辑 + 标 done）= 一个撤销步
+          edits.forEach(function (c) { try { results.push(OPS[c.op].run(c, { noHistory: true })); } catch (e) { results.push('✗ ' + c.op + '：' + (e && e.message || e)); } });
+          actions.forEach(function (c) { try { results.push(OPS[c.op].run(c, {})); } catch (e) { results.push('✗ ' + (e && e.message || e)); } });
+          doneIds.forEach(function (idc) { App.setCommentStatus(idc, 'done', { noHistory: true }); });
+          addMsg('note', results.join('\n') + '\n（' + doneIds.length + ' 条批注已标记 ✓已执行）');
+          finish();
+        });
+      }).catch(function (e) { removeMsg(thinking); addMsg('assistant', '⚠ ' + (e && e.message || e)); finish(); });
+    }
+    function retryOrFail(err) {
+      lastErr = err; attempt++;
+      if (attempt <= MAX_REPAIR) step();
+      else { removeMsg(thinking); addMsg('assistant', '抱歉，没能把这些批注转成可执行操作。\n（' + err + '）'); persistChat(); finish(); }
+    }
+    function finish() { pending = false; setBusy(false); updateCommentBar(); }
+    step();
+  }
+
+  function updateCommentBar() {
+    var lbl = document.getElementById('aiCommentCount'), btn = document.getElementById('btnRunComments');
+    var n = (App.getComments ? App.getComments() : []).filter(function (c) { return c.status === 'pending'; }).length;
+    if (lbl) lbl.textContent = '待执行批注 ' + n + ' 条';
+    if (btn) btn.disabled = (n === 0 || pending);
+  }
+
   /* ===================== UI ===================== */
   var msgs = [];   // {role:'user'|'assistant'|'note'|'think', text}
   var elPanel, elMsgs, elInput, elSend, elResizer, btnAi;
@@ -648,6 +738,11 @@ stateSnapshot()
       var cc = dlg.querySelector('#aiCfgCancel'); if (cc) cc.addEventListener('click', closeConfig);
     }
 
+    // 「▶ 执行批注」按钮 + 待执行计数（随评论变化更新）
+    var brun = document.getElementById('btnRunComments'); if (brun) brun.addEventListener('click', executeComments);
+    if (App.bus) App.bus.on('comments:changed', updateCommentBar);
+    updateCommentBar();
+
     getAI('/api/ai/config').then(function (c) { cfgCache = c; }).catch(function () {});
     if (localStorage.getItem(STORAGE.OPEN) === '1') setOpen(true);
   }
@@ -655,5 +750,5 @@ stateSnapshot()
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 
   // 暴露少量调试入口
-  window.QJAi = { open: function () { setOpen(true); }, OPS: OPS, run: function (cmds) { var ck = validateAll(cmds); if (ck.ok) executePlan(cmds, ck); return ck; } };
+  window.QJAi = { open: function () { setOpen(true); }, OPS: OPS, runComments: executeComments, run: function (cmds) { var ck = validateAll(cmds); if (ck.ok) executePlan(cmds, ck); return ck; } };
 })();
