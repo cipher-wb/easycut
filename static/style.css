@@ -954,10 +954,26 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
   background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--r-md);
   padding: 12px 13px;
 }
+/* 聊天内容可选中复制（覆盖全局 user-select:none） */
+#aiMessages, .ai-msg, .ai-msg-body, .ai-hello { user-select: text; -webkit-user-select: text; }
 .ai-msg {
+  position: relative;
   max-width: 92%; font-size: 13px; line-height: 1.7;
   padding: 9px 12px; border-radius: var(--r-md); white-space: normal; word-break: break-word;
+  cursor: text;
 }
+.ai-msg-body { display: block; }
+/* 每条消息右上角的复制按钮（悬停浮现） */
+.ai-copy {
+  position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity .12s;
+  width: 24px; height: 22px; padding: 0; line-height: 1; font-size: 12px;
+  border-radius: 6px; border: 1px solid var(--line); background: var(--panel);
+  color: var(--text-dim); cursor: pointer; user-select: none;
+}
+.ai-msg:hover .ai-copy, .ai-copy:focus-visible { opacity: .9; }
+.ai-copy:hover { opacity: 1; color: var(--accent); border-color: var(--accent); }
+.ai-msg.user .ai-copy { background: rgba(255,255,255,.22); border-color: transparent; color: #fff; }
+.ai-msg.user .ai-copy:hover { background: rgba(255,255,255,.35); color: #fff; }
 .ai-msg.user {
   align-self: flex-end; background: var(--accent); color: #fff;
   border-bottom-right-radius: 4px;

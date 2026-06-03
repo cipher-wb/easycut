@@ -493,12 +493,30 @@ stateSnapshot()
   function render() {
     if (!elMsgs) return;
     if (!msgs.length) { elMsgs.innerHTML = '<div class="ai-hello">✦ 你好，我是剪辑助手。<br>试试：「把素材库所有素材按顺序放进时间轴」「把名为XX的视频放进来减速一半」「截取XX中间三分之一」「在XX期间左上角加字幕：你好」「导出」。</div>'; return; }
-    elMsgs.innerHTML = msgs.map(function (m) {
+    elMsgs.innerHTML = msgs.map(function (m, i) {
       if (m.role === 'think') return '<div class="ai-msg think"><span class="ai-dots">' + esc(m.text) + '</span></div>';
       var cls = m.role === 'user' ? 'user' : (m.role === 'note' ? 'note' : 'assistant');
-      return '<div class="ai-msg ' + cls + '">' + esc(m.text).replace(/\n/g, '<br>') + '</div>';
+      return '<div class="ai-msg ' + cls + '" data-idx="' + i + '">' +
+        '<button class="ai-copy" data-idx="' + i + '" type="button" title="复制这条">⎘</button>' +
+        '<span class="ai-msg-body">' + esc(m.text).replace(/\n/g, '<br>') + '</span></div>';
     }).join('');
     elMsgs.scrollTop = elMsgs.scrollHeight;
+  }
+
+  // 复制文本（http://127.0.0.1 是安全上下文，clipboard API 可用；带 execCommand 兜底）
+  function copyText(t) {
+    var ok = function () { App.toast && App.toast('已复制', 'ok'); };
+    var bad = function () { App.toast && App.toast('复制失败，请手动选中', 'error'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(ok, function () { legacyCopy(t) ? ok() : bad(); });
+    } else { legacyCopy(t) ? ok() : bad(); }
+  }
+  function legacyCopy(t) {
+    try {
+      var ta = document.createElement('textarea'); ta.value = t;
+      ta.style.position = 'fixed'; ta.style.left = '-9999px'; document.body.appendChild(ta);
+      ta.select(); var r = document.execCommand('copy'); document.body.removeChild(ta); return r;
+    } catch (e) { return false; }
   }
 
   function setBusy(b) { if (elSend) { elSend.disabled = b; elSend.textContent = b ? '…' : '发送'; } if (elInput) elInput.disabled = b; }
@@ -574,6 +592,12 @@ stateSnapshot()
     var bc = document.getElementById('btnAiClose'); if (bc) bc.addEventListener('click', function () { setOpen(false); });
     var bcfg = document.getElementById('btnAiConfig'); if (bcfg) bcfg.addEventListener('click', openConfig);
     var bclr = document.getElementById('btnAiClear'); if (bclr) bclr.addEventListener('click', function () { msgs = []; persistChat(); render(); });
+
+    // 点每条消息的 ⎘ 复制（事件委托，render 重建子节点也不失效）
+    elMsgs.addEventListener('click', function (e) {
+      var btn = e.target && e.target.closest && e.target.closest('.ai-copy'); if (!btn) return;
+      var m = msgs[+btn.getAttribute('data-idx')]; if (m) copyText(m.text);
+    });
 
     function send() { var v = (elInput.value || '').trim(); if (!v || pending) return; elInput.value = ''; askAI(v); }
     if (elSend) elSend.addEventListener('click', send);
