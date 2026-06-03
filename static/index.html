@@ -435,9 +435,11 @@
              └ .th-name / .th-mute(btn) / .th-volume(range,仅视频轨) / .th-hide(btn) / .th-lock(btn) / .th-del(btn) -->
       </div>
 
-      <!-- 右侧：刻度尺 + 轨道行区 + 播放头 + 磁吸线 -->
+      <!-- 右侧：刻度尺 + 整轨批注带 + 轨道行区 + 播放头 + 磁吸线 -->
       <div id="timelineLanes">
         <div id="timelineRuler"></div>
+        <!-- 整轨/全局批注带（scope=global 的评论标签；与左列 #globalCommentHead 等高对齐） -->
+        <div id="globalCommentLane"></div>
         <div id="tracksArea">
           <!-- .track-row（动态）：data-track-id / data-kind；.locked / .hidden 态
                └ .clip（视频片段）/ .text-clip（文字片段），绝对定位

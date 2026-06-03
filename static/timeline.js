@@ -34,9 +34,13 @@
   var SNAP_PX = 8;              // 磁吸命中阈值（屏幕像素，恒定手感）
   var RULER_TARGET_PX = 90;     // 刻度主格目标像素间距
   var RULER_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  var CMT_TAG_H = 16;           // 评论标签行高
+  var CMT_GAP = 3;              // 同层标签间最小水平间距(px)
+  var CMT_MIN_W = 78;           // 点评论/极短区间的最小可读宽度
+  var GCL_MIN_H = 26;           // 整轨批注带最小高度
 
   /* ---------- DOM 句柄（解析时容错 contract 权威 id 与 timeline_v2 草案 id） ---------- */
-  var elPanel, elScroll, elRuler, elHeads, elArea, elLanes, elPlayhead, elSnap, elTotalDur, elDrop;
+  var elPanel, elScroll, elRuler, elHeads, elArea, elLanes, elPlayhead, elSnap, elTotalDur, elDrop, elGlobalCmt;
   var elBtnZoomIn, elBtnZoomOut, elRngZoom, elBtnAddTrack, elAddTrackMenu;
   var ready = false;
 
@@ -52,6 +56,7 @@
     elPanel = pick('timelinePanel');
     elScroll = pick('timelineScroll', 'tlScroll');
     elRuler = pick('timelineRuler', 'tlRuler');
+    elGlobalCmt = pick('globalCommentLane');
     elHeads = pick('trackHeads', 'tlHeads');
     elLanes = pick('timelineLanes', 'tlLanesWrap');   // 横向滚动容器（overflow-x:auto），#tracksArea/#timelineRuler 的父
     elArea = pick('tracksArea', 'tlLanes');
@@ -182,6 +187,7 @@
     renderHeads();
     renderTracks();
     renderRuler();
+    renderGlobalComments();
     updatePlayhead(playhead());
     refreshToolbar();
   }
@@ -189,6 +195,10 @@
   /* 4.1 轨道头（左列）——顶层在第一行（数组末尾先画） */
   function renderHeads() {
     var tr = tracks(), frag = document.createDocumentFragment();
+    // 整轨批注带的左列占位（与右侧 #globalCommentLane 等高对齐；高度在 renderGlobalComments 里同步）
+    var gch = el('div', 'gcl-head'); gch.id = 'globalCommentHead'; gch.style.height = GCL_MIN_H + 'px';
+    gch.appendChild(el('span', 'gcl-head-label', '整轨批注'));
+    frag.appendChild(gch);
     for (var i = tr.length - 1; i >= 0; i--) {
       var t = tr[i];
       var h = el('div', 'track-head ' + t.kind + (t.locked ? ' locked' : '') + (t.hidden ? ' hidden' : ''));
@@ -236,6 +246,10 @@
       lane.style.width = cw + 'px';
       (function (track) {
         track.clips.forEach(function (c) { lane.appendChild(renderClip(c, track)); });
+        // 该轨片段评论（scope=clip 且 clipId 属于本轨）→ 标签贴在片段顶部，自动错开
+        var ids = {}; track.clips.forEach(function (c) { ids[c.id] = 1; });
+        var tcs = comments().filter(function (c) { return c.scope === 'clip' && c.clipId && ids[c.clipId]; });
+        if (tcs.length) renderCmtTags(lane, tcs);
       })(t);
       frag.appendChild(lane);
     }
@@ -247,6 +261,57 @@
     elArea.replaceChildren(frag);
     if (elPlayhead) { elPlayhead.style.height = (tr.length * TRACK_H) + 'px'; }
     if (elSnap) { elSnap.style.height = (tr.length * TRACK_H) + 'px'; }
+  }
+
+  /* ---------- 评论 / 批注标签（导演批注，给 AI 的剪辑指令）---------- */
+  function comments() { return (App.getComments ? App.getComments() : (project().comments || [])); }
+  // 评论 → 像素矩形 {left,width}（区间=跨度，点=最小可读宽）
+  function cmtRect(c) {
+    if (c.kind === 'range') {
+      var L = timeToX(c.start || 0);
+      var W = Math.max(CMT_MIN_W, timeToX(Math.max(0, (c.end || c.start || 0) - (c.start || 0))));
+      return { left: L, width: W };
+    }
+    return { left: timeToX(c.at || 0), width: CMT_MIN_W };
+  }
+  // 贪心分层：items=[{left,width,...}] 按 left 升序分配"最低且不与该层已占区间重叠"的 lane；返回层数。
+  function packLanes(items) {
+    var laneEnd = [];
+    items.slice().sort(function (a, b) { return a.left - b.left; }).forEach(function (it) {
+      var placed = -1;
+      for (var l = 0; l < laneEnd.length; l++) { if (it.left >= laneEnd[l] - 1e-3) { placed = l; break; } }
+      if (placed < 0) { placed = laneEnd.length; laneEnd.push(0); }
+      it.lane = placed; laneEnd[placed] = it.left + it.width + CMT_GAP;
+    });
+    return laneEnd.length;
+  }
+  function cmtTagEl(c, it) {
+    var t = el('div', 'cmt-tag ' + c.kind + ' ' + (c.status || 'pending') + (c.scope === 'global' ? ' global' : ''));
+    t.dataset.commentId = c.id;
+    t.style.left = it.left + 'px';
+    t.style.width = it.width + 'px';
+    t.style.top = (2 + it.lane * (CMT_TAG_H + 2)) + 'px';
+    var mark = c.status === 'done' ? '✓ ' : (c.status === 'stale' ? '⚠ ' : (c.kind === 'point' ? '📍' : '⟷ '));
+    t.appendChild(el('span', 'cmt-text', mark + (c.text || '（空）')));
+    t.title = (c.status === 'done' ? '[已执行] ' : (c.status === 'stale' ? '[锚点失效] ' : '')) + (c.text || '');
+    return t;
+  }
+  // 把一批评论渲进容器（自动错开不重叠），返回所占层数
+  function renderCmtTags(container, list) {
+    var items = list.map(function (c) { var r = cmtRect(c); return { c: c, left: r.left, width: r.width }; });
+    var lanes = packLanes(items);
+    items.forEach(function (it) { container.appendChild(cmtTagEl(it.c, it)); });
+    return lanes;
+  }
+  // 整轨/全局批注带（scope=global）+ 左列等高对齐
+  function renderGlobalComments() {
+    if (!elGlobalCmt) return;
+    elGlobalCmt.style.width = contentWidth() + 'px';
+    elGlobalCmt.replaceChildren();
+    var lanes = renderCmtTags(elGlobalCmt, comments().filter(function (c) { return c.scope === 'global'; }));
+    var h = Math.max(GCL_MIN_H, lanes * (CMT_TAG_H + 2) + 4);
+    elGlobalCmt.style.height = h + 'px';
+    var head = $('globalCommentHead'); if (head) head.style.height = h + 'px';
   }
 
   /* 4.3 单个片段块 */
@@ -1034,6 +1099,7 @@
     bus.on('project:changed', renderAll);
     bus.on('tracks:changed', function () { renderHeads(); renderTracks(); refreshToolbar(); });
     bus.on('clips:changed', renderAll);   // 兼容草案事件名
+    bus.on('comments:changed', renderAll);   // 评论新增/改/删 → 重渲标签层
     bus.on('selection:changed', onSelectionChanged);
     bus.on('time:update', function (p) { updatePlayhead(p && typeof p.t === 'number' ? p.t : (typeof p === 'number' ? p : playhead())); });
     bus.on('zoom:changed', function () { /* 自身触发，避免回环 */ });

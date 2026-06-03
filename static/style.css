@@ -1052,3 +1052,34 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
   #aiResizer { display: none; }
   #aiPanel { flex-basis: 60vw; width: 60vw; }
 }
+
+/* ===================================================================
+   时间轴评论 / 批注标签（导演批注，给 AI 的剪辑指令）
+   =================================================================== */
+/* 整轨/全局批注带（刻度尺下方，右滚动区内，宽度=内容宽，随横滚平移） */
+#globalCommentLane {
+  position: relative; height: 26px; min-height: 26px; width: 100%;
+  background: var(--panel-2); border-bottom: 1px solid var(--line); overflow: hidden;
+}
+/* 左列对应的占位/标签（与 #globalCommentLane 等高） */
+.gcl-head {
+  display: flex; align-items: center; padding: 0 10px;
+  background: var(--panel-2); border-bottom: 1px solid var(--line); box-sizing: border-box;
+}
+.gcl-head-label { font-size: 11px; color: var(--text-dim); letter-spacing: .3px; }
+
+/* 评论标签：绝对定位，left=time*pxPerSec，top=lane*行高（错开） */
+.cmt-tag {
+  position: absolute; height: 16px; line-height: 15px; box-sizing: border-box;
+  padding: 0 5px; border-radius: 4px; font-size: 11px;
+  background: var(--accent-soft); color: var(--accent-2); border: 1px solid var(--accent);
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  cursor: pointer; z-index: 12; user-select: none;
+  box-shadow: 0 1px 2px rgba(60,52,38,.12);
+}
+.cmt-tag:hover { filter: brightness(1.03); box-shadow: var(--shadow); }
+.cmt-tag.selected { outline: 2px solid var(--accent); outline-offset: 0; }
+.cmt-tag.global { background: var(--panel-3); color: var(--text); border-color: var(--clip-text); }
+.cmt-tag.done { opacity: .5; }
+.cmt-tag.stale { background: var(--danger); color: #fff; border-color: var(--danger); }
+.cmt-tag .cmt-text { pointer-events: none; display: block; overflow: hidden; text-overflow: ellipsis; }
