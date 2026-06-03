@@ -39,7 +39,8 @@
   var project = {
     output: { width: 1920, height: 1080, fps: 30, crf: 18, keepAudio: true },
     media: [],
-    tracks: []
+    tracks: [],
+    comments: []   // 时间轴批注（给 AI 的剪辑指令）；见 §14.2
   };
 
   // 默认两条视频轨（contract_v2 §1.3）。
@@ -313,7 +314,7 @@
   // 撤销快照只含“项目编辑内容”= output + tracks（contract_v2 §6.8）。
   // media（素材库）独立管理、不参与 undo/redo（addMedia/removeMedia 不入栈），
   // 故快照不含 media——否则撤销一次片段编辑会把之后导入的素材一并回退。
-  function snapshot() { return JSON.parse(JSON.stringify({ output: project.output, tracks: project.tracks })); }
+  function snapshot() { return JSON.parse(JSON.stringify({ output: project.output, tracks: project.tracks, comments: project.comments })); }
 
   // 就地把 project 内容替换为 snap（保持 project 引用与 output/tracks 数组引用）。
   // 不触碰 project.media（媒体库不在快照内）。
@@ -324,6 +325,10 @@
     // tracks：清空重填（保持数组引用）
     project.tracks.length = 0;
     for (var j = 0; j < snap.tracks.length; j++) project.tracks.push(snap.tracks[j]);
+    // comments：同样清空重填（撤销/重做覆盖批注）
+    project.comments.length = 0;
+    var sc = snap.comments || [];
+    for (var k = 0; k < sc.length; k++) project.comments.push(sc[k]);
   }
 
   function pushHistory() {
@@ -762,6 +767,71 @@
     changed('closeGap');
     bus.emit('clips:changed', { trackId: trackId });
     return true;
+  }
+
+  /* ===================================================================== *
+   * 14.2 时间轴评论 / 批注（导演批注式，给 AI 的剪辑指令）
+   *   评论本身不改剪辑，只是"待执行意图"；由 ai.js 批量交给 AI 执行（执行后标 done）。
+   *   随工程保存/加载、进撤销栈（snapshot 已含 comments）。
+   * ===================================================================== */
+  function getComments() { return project.comments; }
+  function _commentIndex(id) { for (var i = 0; i < project.comments.length; i++) if (project.comments[i].id === id) return i; return -1; }
+  function getComment(id) { var i = _commentIndex(id); return i >= 0 ? project.comments[i] : null; }
+  // 锚点片段已不存在的 clip 评论标 stale（done 的保留）
+  function _revalidateComments() {
+    var ids = {};
+    project.tracks.forEach(function (t) { (t.clips || []).forEach(function (c) { ids[c.id] = 1; }); });
+    project.comments.forEach(function (c) {
+      if (c.scope === 'clip' && c.clipId && !ids[c.clipId] && c.status !== 'done') c.status = 'stale';
+    });
+  }
+  function addComment(obj) {
+    obj = obj || {};
+    var kind = (obj.kind === 'range') ? 'range' : 'point';
+    var scope = (obj.scope === 'global') ? 'global' : 'clip';
+    var c = {
+      id: nextId('cmt'),
+      text: String(obj.text || ''),
+      kind: kind, scope: scope,
+      clipId: scope === 'clip' ? (obj.clipId || null) : null,
+      status: 'pending',
+      createdAt: Date.now()
+    };
+    if (kind === 'point') { c.at = Math.max(0, num(obj.at, 0)); }
+    else { c.start = Math.max(0, num(obj.start, 0)); c.end = Math.max(c.start + 0.01, num(obj.end, c.start + 1)); }
+    pushHistory();
+    project.comments.push(c);
+    markDirty();
+    bus.emit('comments:changed', {});
+    return c.id;
+  }
+  function updateComment(id, patch) {
+    var c = getComment(id); if (!c) return;
+    patch = patch || {};
+    pushHistory();
+    if (patch.text != null) c.text = String(patch.text);
+    if (patch.at != null) c.at = Math.max(0, num(patch.at, c.at));
+    if (patch.start != null) c.start = Math.max(0, num(patch.start, c.start));
+    if (patch.end != null) c.end = Math.max((c.start || 0) + 0.01, num(patch.end, c.end));
+    if (patch.status != null) c.status = patch.status;
+    markDirty();
+    bus.emit('comments:changed', {});
+  }
+  function removeComment(id) {
+    var i = _commentIndex(id); if (i < 0) return;
+    pushHistory();
+    project.comments.splice(i, 1);
+    markDirty();
+    bus.emit('comments:changed', {});
+  }
+  // 执行后标记状态（done/pending/stale）。opts.noHistory：批量执行时由上层统一压一次历史。
+  function setCommentStatus(id, status, opts) {
+    var c = getComment(id); if (!c) return;
+    if (!(opts && opts.noHistory)) pushHistory();
+    c.status = status;
+    if (status === 'done') c.executedAt = Date.now();
+    markDirty();
+    bus.emit('comments:changed', {});
   }
 
   // edge-trim 修剪（contract_v2 §6.4）。edge:"in"|"out"，deltaSec 为该边位移。
@@ -1896,7 +1966,8 @@
       };
     });
     var tracks = JSON.parse(JSON.stringify(project.tracks));
-    return { output: out, media: media, tracks: tracks };
+    var comments = JSON.parse(JSON.stringify(project.comments || []));
+    return { output: out, media: media, tracks: tracks, comments: comments };
   }
 
   // 把某 media 的越界视频 clips clamp 到 [0, newDuration]；丢弃整段越界(out<=in 或 in>=dur)。
@@ -1943,6 +2014,11 @@
     });
     project.tracks.length = 0;
     ltracks.forEach(function (t) { project.tracks.push(t); });
+
+    // 评论批注：就地重填 + 校验锚点片段是否还在（失效标 stale）
+    project.comments.length = 0;
+    (lp.comments || []).forEach(function (c) { if (c) project.comments.push(c); });
+    _revalidateComments();
 
     // 3) 应用 mediaStatus（权威）：offline/streamId/dims/duration/fps/hasAudio + thumbUrl 重建。
     var statusById = {};
@@ -2017,6 +2093,7 @@
 
     project.media.length = 0;
     project.tracks.length = 0;
+    project.comments.length = 0;
     initDefaultTracks();   // 复用默认 2 条视频轨逻辑（保持 tracks 数组引用）
 
     undoStack.length = 0; redoStack.length = 0;
@@ -2101,6 +2178,8 @@
     // 视频片段
     addClipFromMedia: addClipFromMedia, splitClip: splitClip, removeClip: removeClip,
     rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip, closeGap: closeGap,
+    getComments: getComments, getComment: getComment, addComment: addComment,
+    updateComment: updateComment, removeComment: removeComment, setCommentStatus: setCommentStatus,
     setClipTransform: setClipTransform, setClipSpeed: setClipSpeed, getClip: getClip,
     duplicateClip: duplicateClip, copyClip: copyClip, pasteClip: pasteClip,
     createFreezeClip: createFreezeClip, freezeAtPlayhead: freezeAtPlayhead, setFreezeProp: setFreezeProp,
