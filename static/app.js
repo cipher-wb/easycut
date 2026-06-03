@@ -817,9 +817,9 @@
     markDirty();
     bus.emit('comments:changed', {});
   }
-  function removeComment(id) {
+  function removeComment(id, opts) {
     var i = _commentIndex(id); if (i < 0) return;
-    pushHistory();
+    if (!(opts && opts.noHistory)) pushHistory();
     project.comments.splice(i, 1);
     markDirty();
     bus.emit('comments:changed', {});

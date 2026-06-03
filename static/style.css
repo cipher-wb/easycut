@@ -1092,10 +1092,12 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
 
 /* 评论右键菜单 + 文本气泡 */
 .cmt-ctxmenu {
-  position: fixed; z-index: 200; min-width: 180px; padding: 4px;
+  position: fixed; right: auto; top: auto;   /* 覆盖 .menu 的 right:0（否则 left+right 同设会横向撑满） */
+  z-index: 200; width: max-content; min-width: 0; max-width: 280px; padding: 4px;
   background: var(--panel); border: 1px solid var(--line);
   border-radius: var(--r-sm); box-shadow: var(--shadow-pop);
 }
+.cmt-ctxmenu .menu-item { white-space: nowrap; }
 .cmt-popover {
   position: fixed; z-index: 201; width: 290px; max-width: 92vw; padding: 10px;
   background: var(--panel); border: 1px solid var(--line);

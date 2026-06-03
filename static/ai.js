@@ -588,8 +588,8 @@ stateSnapshot()
           App.pushHistory();   // 整批（编辑 + 标 done）= 一个撤销步
           edits.forEach(function (c) { try { results.push(OPS[c.op].run(c, { noHistory: true })); } catch (e) { results.push('✗ ' + c.op + '：' + (e && e.message || e)); } });
           actions.forEach(function (c) { try { results.push(OPS[c.op].run(c, {})); } catch (e) { results.push('✗ ' + (e && e.message || e)); } });
-          doneIds.forEach(function (idc) { App.setCommentStatus(idc, 'done', { noHistory: true }); });
-          addMsg('note', results.join('\n') + '\n（' + doneIds.length + ' 条批注已标记 ✓已执行）');
+          doneIds.forEach(function (idc) { App.removeComment(idc, { noHistory: true }); });   // 执行后删除（不保留）
+          addMsg('note', results.join('\n') + '\n（已执行并移除 ' + doneIds.length + ' 条批注；Ctrl+Z 可整批回退）');
           finish();
         });
       }).catch(function (e) { removeMsg(thinking); addMsg('assistant', '⚠ ' + (e && e.message || e)); finish(); });

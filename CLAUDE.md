@@ -37,7 +37,7 @@
 | `static/projects.js` | 工程系统 UI：工程面板（启动弹出）/ 保存/另存为对话框 / 离线横幅 / relink 流程 |
 | `static/export.js` | 导出流程（pick-save → /api/export → 轮询进度） |
 | `static/theme.js` | 白天/夜间主题切换（`#btnTheme`，data-theme=dark，localStorage `qj-theme`） |
-| `static/ai.js` | **AI 剪辑助手**：自然语言→结构化剪辑指令。①指令注册表 `OPS`（op→{check,run}，加功能=注册新 op）②解析器（名字/前缀/选中/"中间1/3"等→id/秒）③解释器（整体校验→删除/导出确认→单步撤销执行）④AI 桥（系统提示注入指令表+工程快照→`/api/ai`→只输出 `{say,commands}` JSON→校验不过自动修复≤2 次）。全部编辑走 `App.*` mutator，撤销/刷新自动正确。面板 `#aiPanel`（同层并排可拖宽）、设置 `#aiConfigDialog`、顶栏 `#btnAi`。**`executeComments()`**：把时间轴待执行批注汇成结构化清单喂 AI→出 `{say,commands,done}`→**总是先列计划确认**→整批一步撤销执行→标 ✓已执行（面板「▶ 执行批注 (N)」#btnRunComments）。调试入口 `window.QJAi.run(cmds)` / `QJAi.runComments()` |
+| `static/ai.js` | **AI 剪辑助手**：自然语言→结构化剪辑指令。①指令注册表 `OPS`（op→{check,run}，加功能=注册新 op）②解析器（名字/前缀/选中/"中间1/3"等→id/秒）③解释器（整体校验→删除/导出确认→单步撤销执行）④AI 桥（系统提示注入指令表+工程快照→`/api/ai`→只输出 `{say,commands}` JSON→校验不过自动修复≤2 次）。全部编辑走 `App.*` mutator，撤销/刷新自动正确。面板 `#aiPanel`（同层并排可拖宽）、设置 `#aiConfigDialog`、顶栏 `#btnAi`。**`executeComments()`**：把时间轴待执行批注汇成结构化清单喂 AI→出 `{say,commands,done}`→**总是先列计划确认**→整批一步撤销执行→**执行成功的批注 removeComment 删除（不保留）**（面板「▶ 执行批注 (N)」#btnRunComments）。调试入口 `window.QJAi.run(cmds)` / `QJAi.runComments()` |
 | `ai_config.json` | AI 配置（protocol/baseURL/**apiKey**/model），后端读写、原子写。**已 .gitignore，含密钥，绝不进仓库/不分发**。仓库内提交 `ai_config.example.json` 作模板（无真实 key；`load_ai_config` 只读 `AI_DEFAULT` 里的键，模板里的 `_说明` 等额外键被忽略） |
 | `projects/`、`media_store/` | 运行时用户数据（工程库 / 持久素材副本），**已 .gitignore** |
 | `_build/` | 设计文档与实测记录（contract / ffmpeg_recipe / engine / timeline / speed / project_design 等），**已 .gitignore，不进仓库**；属内部脚手架 |
