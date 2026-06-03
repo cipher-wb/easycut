@@ -1038,9 +1038,9 @@ def _decode_header_word(s):
 AI_CONFIG_PATH = os.path.join(BASE_DIR, "ai_config.json")
 AI_DEFAULT = {
     "protocol": "openai",                       # openai 兼容 | claude
-    "baseURL": "https://api.deepseek.com/v1",   # OpenAI 兼容填到 /v1，自动追加 /chat/completions
+    "baseURL": "https://api.deepseek.com",      # OpenAI 兼容地址，程序自动追加 /chat/completions
     "apiKey": "",
-    "model": "deepseek-chat",
+    "model": "deepseek-v4-pro",
     "temperature": 0.2,
     "maxTokens": 2048,
 }

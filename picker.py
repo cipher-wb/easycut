@@ -29,8 +29,19 @@ MP4_FILETYPES = [("MP4 视频", "*.mp4"), ("所有文件", "*.*")]
 def _make_root():
     import tkinter as tk
     root = tk.Tk()
-    root.withdraw()          # 隐藏主窗口
-    root.attributes("-topmost", True)  # 对话框置顶，避免被控制台挡住
+    # 不用 withdraw()：被 CREATE_NO_WINDOW 启动时，withdraw 的对话框会失去前台父窗口、
+    # 常常打开在浏览器“后面”，用户看着像“点了没反应”。改用一个**全透明、置顶、抢焦点**的
+    # 1x1 窗口作父窗口，确保系统文件对话框出现在最前面。
+    try:
+        root.attributes("-alpha", 0.0)     # 完全透明，肉眼不可见
+    except Exception:
+        pass
+    root.attributes("-topmost", True)
+    root.geometry("1x1+0+0")
+    try:
+        root.deiconify(); root.lift(); root.focus_force()
+    except Exception:
+        pass
     try:
         root.update()
     except Exception:
@@ -46,6 +57,7 @@ def do_open(multiple):
             sel = filedialog.askopenfilenames(
                 title="选择 mp4 视频（可多选）",
                 filetypes=MP4_FILETYPES,
+                parent=root,
             )
             # askopenfilenames 在某些平台返回 tcl 字符串元组，规范成 list[str]
             if isinstance(sel, str):
@@ -55,6 +67,7 @@ def do_open(multiple):
             p = filedialog.askopenfilename(
                 title="选择 mp4 视频",
                 filetypes=MP4_FILETYPES,
+                parent=root,
             )
             paths = [os.path.abspath(p)] if p else []
         return {"paths": paths}
@@ -78,6 +91,7 @@ def do_save(suggest_name):
             defaultextension=".mp4",
             initialfile=initialfile,
             filetypes=MP4_FILETYPES,
+            parent=root,
         )
         return {"path": os.path.abspath(p) if p else None}
     finally:
