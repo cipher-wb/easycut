@@ -1,0 +1,9 @@
+{
+  "_说明": "AI 助手配置模板。两种用法任选其一：① 推荐——直接在软件里点「✦ AI 助手 → ⚙ 设置」填写并保存（会自动生成本机的 ai_config.json，无需手动改文件）；② 手动——把本文件复制为同目录下的 ai_config.json，填好 apiKey 再启动。注意：ai_config.json 含你的密钥，已被 .gitignore，不会随仓库/打包分发出去；每位成员各填各自的 key。",
+  "protocol": "openai",
+  "baseURL": "https://api.deepseek.com/v1",
+  "apiKey": "",
+  "model": "deepseek-chat",
+  "temperature": 0.2,
+  "maxTokens": 2048
+}
