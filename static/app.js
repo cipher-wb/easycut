@@ -1723,15 +1723,20 @@
    * 25. 顶部工具栏（contract_v2 §4.1）
    * ===================================================================== */
   function bindToolbar() {
-    var bi = $('btnImport');
-    if (bi) bi.addEventListener('click', function () {
-      bi.disabled = true;
-      importViaPicker(true).then(function (ids) {
-        if (ids.length) toast('已导入 ' + ids.length + ' 个视频到素材库', 'info', 1800);
-        else toast('未选择文件', null, 1500);
-      }).catch(function (e) { toast('导入失败：' + e.message, 'error'); })
-        .then(function () { bi.disabled = false; });
+    // 导入：用浏览器自带的文件选择框（隐藏 <input type=file>），最可靠、永远在最前面，
+    // 不依赖系统 tkinter 对话框（后者在部分机器上会开在窗口后面、像“没反应”）。选中后走
+    // importFiles（= 上传进 media_store，与拖拽导入一致）。
+    var fileInput = $('fileImport');
+    function openFilePicker() { if (fileInput) fileInput.click(); else importViaPicker(true); }
+    if (fileInput) fileInput.addEventListener('change', function () {
+      var files = fileInput.files;
+      if (files && files.length) importFiles(files).catch(function (e) { toast('导入失败：' + e.message, 'error'); });
+      fileInput.value = '';   // 清空，允许再次选择同一文件
     });
+    var bi = $('btnImport');
+    if (bi) bi.addEventListener('click', openFilePicker);
+    var bim = $('btnImportMini');
+    if (bim) bim.addEventListener('click', openFilePicker);
 
     var bat = $('btnAddText');
     if (bat) bat.addEventListener('click', function () {
