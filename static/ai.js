@@ -238,6 +238,24 @@
       run: function (c) { var loc = resolveClipRef(c.clip); var r = App.splitClip(loc.trackId, loc.clipId, +c.at); return r ? '✓ 已在 ' + n1(+c.at) + 's 分割' : '✗ 该位置无法分割'; }
     },
 
+    close_gap: {
+      confirm: false,
+      check: function (c, ctx) {
+        if (c.clip != null) { if (!clipResolvable(c.clip, ctx)) return { ok: false, error: '找不到片段：' + refStr(c.clip) }; return { ok: true, summary: '删除该片段前的空隙' }; }
+        if (c.track != null && c.at != null) return { ok: true, summary: '删除空隙' };
+        return { ok: false, error: 'close_gap 需要 clip，或 track + at' };
+      },
+      run: function (c) {
+        if (c.clip != null) {
+          var loc = resolveClipRef(c.clip); if (!loc) return '✗ 找不到片段';
+          var l = App.locateClip(loc.clipId); if (!l) return '✗ 找不到片段';
+          return App.closeGap(loc.trackId, l.clip.start - 0.001) ? '✓ 已删除空隙' : '（该片段前没有空隙）';
+        }
+        var tid = resolveTrackId(c.track, 'video');
+        return (tid && App.closeGap(tid, +c.at)) ? '✓ 已删除空隙' : '✗ 未找到可删的空隙';
+      }
+    },
+
     set_transform: {
       confirm: false,
       check: function (c, ctx) {
@@ -417,6 +435,7 @@
 '3. trim_clip 裁剪已有片段的源区间。clip(必填) | in/out(秒) 或 inFrac/outFrac(0~1)。"中间1/3到2/3"=> inFrac:0.333,outFrac:0.667。',
 '4. move_clip 移动片段到某时间。clip | start(秒) | track(可选，跨轨)。',
 '5. split_clip 分割片段。clip | at(时间轴秒)。',
+'5.1 close_gap 删除空隙（把后续片段左移补缝，仅本轨）。clip(删除该片段前的空隙) 或 track + at(秒)。例：「删掉 风景 前面的空白」=> [{"op":"close_gap","clip":"风景"}]。',
 '6. set_transform 画中画缩放/位置。clip | scale | cx | cy | opacity(均0~1，cx/cy为中心点比例)。',
 '7. delete_clip 删除片段。clip | ripple(true=波纹删除并补缝)。【需用户确认】',
 '8. add_text 加文字/字幕。content(必填) | during(片段引用，则文字覆盖该片段时间段) 或 start+duration(秒) | position("top-left"/"top-center"/"top-right"/"center"/"bottom-left"/"bottom-center"/"bottom-right") 或 xPct/yPct(0~1) | align | color(#RRGGBB) | fontSizePct(0~0.5) | track(可选)。',

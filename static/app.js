@@ -742,6 +742,28 @@
     return { trackId: dstTrack.id, start: placed };
   }
 
+  // 删除空隙（仅本轨）：把 atSec 落入的那段空白消除——空白右侧的片段（及其后所有片段）
+  // 整体左移，紧贴空白左侧片段的末尾（轨首的空白则贴到 0）。一次撤销步。
+  function closeGap(trackId, atSec) {
+    var track = getTrack(trackId); if (!track) return false;
+    if (track.locked) { toast('该轨道已锁定', 'error'); return false; }
+    atSec = Math.max(0, num(atSec, 0));
+    var gapStart = 0, nextStart = null;
+    track.clips.forEach(function (c) {
+      var e = c.start + clipDur(c, track);
+      if (e <= atSec + 1e-6 && e > gapStart) gapStart = e;                       // 左侧最近片段右缘
+      if (c.start >= atSec - 1e-6 && (nextStart == null || c.start < nextStart)) nextStart = c.start; // 右侧最近片段左缘
+    });
+    if (nextStart == null) { toast('这里后面没有片段，没有空隙可删', null, 1600); return false; }
+    var shift = nextStart - gapStart;
+    if (shift <= 1e-6) { toast('这里没有空隙', null, 1400); return false; }
+    pushHistory();
+    track.clips.forEach(function (c) { if (c.start >= nextStart - 1e-6) c.start = Math.max(0, c.start - shift); });
+    changed('closeGap');
+    bus.emit('clips:changed', { trackId: trackId });
+    return true;
+  }
+
   // edge-trim 修剪（contract_v2 §6.4）。edge:"in"|"out"，deltaSec 为该边位移。
   function trimClip(trackId, clipId, edge, deltaSec, opts) {
     opts = opts || {};
@@ -2073,7 +2095,7 @@
 
     // 视频片段
     addClipFromMedia: addClipFromMedia, splitClip: splitClip, removeClip: removeClip,
-    rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip,
+    rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip, closeGap: closeGap,
     setClipTransform: setClipTransform, setClipSpeed: setClipSpeed, getClip: getClip,
     duplicateClip: duplicateClip, copyClip: copyClip, pasteClip: pasteClip,
     createFreezeClip: createFreezeClip, freezeAtPlayhead: freezeAtPlayhead, setFreezeProp: setFreezeProp,

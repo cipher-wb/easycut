@@ -401,6 +401,12 @@
       doClearSelection();
       startScrub(e);
     });
+    // 双击两段之间的空白：删除该空隙（仅当前轨，后续片段左移补缝）
+    elArea.addEventListener('dblclick', function (e) {
+      if (e.target.closest('.clip') || e.target.closest('.text-clip')) return;
+      var lane = laneAt(e); if (!lane || !lane.dataset.trackId) return;
+      if (App.closeGap) App.closeGap(lane.dataset.trackId, clientXToTime(e.clientX));
+    });
   }
 
   function onLanePointerDown(e) {
