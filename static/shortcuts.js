@@ -89,6 +89,9 @@
   function doPaste() {
     if (typeof App.pasteClip === 'function') App.pasteClip(playhead());
   }
+  function doFreeze() {   // 定格：在播放头把选中（或播放头下）视频片段冻结成静止帧（就地插入）
+    if (typeof App.freezeAtPlayhead === 'function') App.freezeAtPlayhead('inplace');
+  }
 
   function togglePlay() {
     if (typeof App.togglePlay === 'function') App.togglePlay();
@@ -139,6 +142,7 @@
       ['Backspace', '波纹删除（删除并使后续片段前移补缝）'],
       ['Ctrl + C / Ctrl + V', '复制 / 粘贴片段到播放头'],
       ['Ctrl + D', '原地复制一份片段'],
+      ['Shift + F', '定格：把播放头处那一帧冻结成静止画面（就地插入）'],
       ['按住 Shift 拖片段右边缘', '变速（拉长变慢 / 拉短变快，0.25×–4×）'],
     ] },
     { title: '选择 / 撤销', items: [
@@ -214,6 +218,7 @@
     'ctrl+c'          : function () { doCopy(); },
     'ctrl+v'          : function () { doPaste(); },
     'ctrl+d'          : function (e) { e.preventDefault(); doDuplicate(); },
+    'shift+f'         : function (e) { e.preventDefault(); doFreeze(); },        // 定格（就地）
 
     '+'               : function (e) { e.preventDefault(); zoomIn(); },
     '='               : function (e) { e.preventDefault(); zoomIn(); },

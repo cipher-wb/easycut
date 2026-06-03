@@ -181,8 +181,8 @@
           var clip = clips[ci];
           var m = mediaById.get(clip.mediaId);
           if (!m) continue;                         // 源缺失: 跳过
-          // 公式 A: 视频片段时间轴长度 = (out-in)/speed (speed 默认 1, 钳制由 mutator/导出负责)
-          var dur = (clip.out - clip.in) / (clip.speed || 1);
+          // 公式 A: 视频片段时间轴长度 = (out-in)/speed；定格片段 = duration（与 in/out 解耦）
+          var dur = clip.freeze ? (clip.duration || 0) : (clip.out - clip.in) / (clip.speed || 1);
           if (!(dur > 0)) continue;                 // 非法区间: 跳过
           var tStart = clip.start, tEnd = clip.start + dur;
           segs.push({ clip: clip, media: m, tStart: tStart, tEnd: tEnd });
