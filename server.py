@@ -39,6 +39,8 @@ import subprocess
 import webbrowser
 import mimetypes
 import urllib.parse
+import urllib.request
+import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 让本目录可被 import（双击启动时 cwd 可能不同）
@@ -1027,6 +1029,132 @@ def _decode_header_word(s):
 
 # ---------------------------------------------------------------------------
 # HTTP Handler
+# ===========================================================================
+# AI 助手代理（自然语言驱动剪辑）
+# 把浏览器的对话请求转发给用户自配的大模型。Key 留在后端（ai_config.json，已
+# .gitignore），浏览器只连 127.0.0.1，因此没有 CORS 问题、Key 也不进前端/不分发。
+# 纯标准库 urllib，不引入任何 pip 依赖；只有用户真正使用 AI 时才会联网。
+# ===========================================================================
+AI_CONFIG_PATH = os.path.join(BASE_DIR, "ai_config.json")
+AI_DEFAULT = {
+    "protocol": "openai",                       # openai 兼容 | claude
+    "baseURL": "https://api.deepseek.com/v1",   # OpenAI 兼容填到 /v1，自动追加 /chat/completions
+    "apiKey": "",
+    "model": "deepseek-chat",
+    "temperature": 0.2,
+    "maxTokens": 2048,
+}
+
+
+def load_ai_config():
+    cfg = dict(AI_DEFAULT)
+    try:
+        with open(AI_CONFIG_PATH, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            for k in AI_DEFAULT:
+                if k in obj and obj[k] is not None:
+                    cfg[k] = obj[k]
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print("[ai] 读取 ai_config.json 失败：%s" % e)
+    return cfg
+
+
+def save_ai_config(patch):
+    """合并保存。空字符串的 apiKey 视为「保持原值」，避免误清空已存的 Key。"""
+    cfg = load_ai_config()
+    if isinstance(patch, dict):
+        for k in AI_DEFAULT:
+            if k not in patch or patch[k] is None:
+                continue
+            if k == "apiKey" and not str(patch[k]).strip():
+                continue
+            cfg[k] = patch[k]
+    tmp = AI_CONFIG_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(cfg, ensure_ascii=False, indent=2))
+    os.replace(tmp, AI_CONFIG_PATH)
+    return cfg
+
+
+def _ai_masked(cfg):
+    """给前端的安全视图：不回传完整 Key，只给「是否已配置」+ 末 4 位。"""
+    key = cfg.get("apiKey") or ""
+    return {
+        "protocol": cfg.get("protocol"),
+        "baseURL": cfg.get("baseURL"),
+        "model": cfg.get("model"),
+        "temperature": cfg.get("temperature"),
+        "maxTokens": cfg.get("maxTokens"),
+        "hasKey": bool(key),
+        "keyTail": key[-4:] if key else "",
+    }
+
+
+def ai_chat_complete(system, messages):
+    """调用用户配置的大模型，返回助手文本。失败抛 ValueError（带中文消息）。"""
+    cfg = load_ai_config()
+    if not (cfg.get("apiKey") or "").strip():
+        raise ValueError("尚未配置 AI：请在聊天面板点「⚙ 设置」填入服务地址、API Key 与模型名。")
+    base = (cfg.get("baseURL") or "").rstrip("/")
+    proto = cfg.get("protocol") or "openai"
+    model = cfg.get("model") or ""
+    if proto == "claude":
+        url = base + "/messages"
+        payload = {
+            "model": model, "system": system, "messages": messages,
+            "max_tokens": int(cfg.get("maxTokens") or 2048), "stream": False,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "x-api-key": cfg["apiKey"],
+            "anthropic-version": "2023-06-01",
+        }
+    else:  # openai 兼容（DeepSeek / 通义 / OpenAI 等）
+        url = base + "/chat/completions"
+        msgs = [{"role": "system", "content": system}] + list(messages)
+        payload = {
+            "model": model, "messages": msgs,
+            "temperature": float(cfg.get("temperature") if cfg.get("temperature") is not None else 0.2),
+            "stream": False,
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + cfg["apiKey"],
+        }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "replace")[:600]
+        except Exception:
+            pass
+        raise ValueError("AI 服务返回错误 HTTP %s：%s" % (e.code, detail or e.reason))
+    except urllib.error.URLError as e:
+        raise ValueError("无法连接 AI 服务（%s）。请检查网络 / 服务地址，或本地模型是否已启动。" % (e.reason,))
+    except Exception as e:
+        raise ValueError("调用 AI 失败：%s" % e)
+    try:
+        obj = json.loads(body)
+    except Exception:
+        raise ValueError("AI 返回的不是合法 JSON。")
+    if proto == "claude":
+        parts = obj.get("content") or []
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+    else:
+        choices = obj.get("choices") or []
+        text = choices[0].get("message", {}).get("content", "") if choices else ""
+    if not (text or "").strip():
+        raise ValueError("AI 返回了空内容。")
+    return text
+
+
 # ---------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
     server_version = "JianJianJi/2.0"
@@ -1099,6 +1227,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_projects_load(qs)
             elif path == "/api/fonts":
                 self._send_json({"fonts": list_fonts()})
+            elif path == "/api/ai/config":
+                self._handle_ai_config_get()
             elif path == "/favicon.ico":
                 self.send_response(204)
                 self.end_headers()
@@ -1129,6 +1259,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_projects_rename()
             elif path == "/api/relink":
                 self._handle_relink()
+            elif path == "/api/ai":
+                self._handle_ai_chat()
+            elif path == "/api/ai/config":
+                self._handle_ai_config_save()
             else:
                 self._send_error_json(404, "未找到: %s" % path)
         except json.JSONDecodeError:
@@ -1147,6 +1281,29 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error_json(500, "服务器内部错误: %s" % e)
         except Exception:
             pass
+
+    # ---- AI 助手 ----
+    def _handle_ai_config_get(self):
+        self._send_json(_ai_masked(load_ai_config()))
+
+    def _handle_ai_config_save(self):
+        body = self._read_json_body()
+        cfg = save_ai_config(body if isinstance(body, dict) else {})
+        self._send_json(_ai_masked(cfg))
+
+    def _handle_ai_chat(self):
+        body = self._read_json_body()
+        system = body.get("system") or ""
+        messages = body.get("messages") or []
+        if not isinstance(messages, list) or not messages:
+            self._send_error_json(400, "缺少对话内容 messages")
+            return
+        try:
+            text = ai_chat_complete(system, messages)
+        except ValueError as e:
+            self._send_error_json(502, str(e))
+            return
+        self._send_json({"content": text})
 
     # ---- 静态文件 ----
     def _serve_static(self, path):

@@ -59,6 +59,9 @@
       <button id="btnTheme" type="button" title="切换白天 / 夜间模式">🌙 夜间</button>
     </div>
     <div class="tb-group">
+      <button id="btnAi" type="button" title="AI 剪辑助手：用自然语言指挥剪辑">✦ AI 助手</button>
+    </div>
+    <div class="tb-group">
       <button id="btnExport" type="button" disabled class="primary" title="导出为新的 mp4 文件 (Ctrl+E)">⬇ 导出</button>
     </div>
   </div>
@@ -357,6 +360,24 @@
         </label>
       </div>
     </aside>
+
+    <!-- ===== 最右：AI 剪辑助手（同层并排、可拖宽，默认隐藏） ===== -->
+    <div id="aiResizer" hidden title="拖动调整 AI 面板宽度"></div>
+    <aside id="aiPanel" hidden>
+      <div id="aiHead">
+        <span class="ai-title">✦ AI 剪辑助手</span>
+        <span class="ai-head-btns">
+          <button id="btnAiConfig" type="button" class="mini" title="AI 设置（服务地址 / Key / 模型）">⚙</button>
+          <button id="btnAiClear" type="button" class="mini" title="清空对话">🧹</button>
+          <button id="btnAiClose" type="button" class="mini" title="收起面板">✕</button>
+        </span>
+      </div>
+      <div id="aiMessages"></div>
+      <div id="aiComposer">
+        <textarea id="aiInput" rows="2" placeholder="用中文说你想怎么剪，例如：把所有素材按顺序放进时间轴"></textarea>
+        <button id="aiSend" type="button" class="primary">发送</button>
+      </div>
+    </aside>
   </div>
 
   <!-- ============ 底部多轨时间轴 #timelinePanel ============ -->
@@ -458,6 +479,33 @@
     </div>
   </dialog>
 
+  <!-- ============ AI 设置对话框 #aiConfigDialog ============ -->
+  <dialog id="aiConfigDialog">
+    <div class="ai-cfg-box">
+      <h3>AI 设置</h3>
+      <p class="ai-cfg-hint">配置只保存在本机（<code>ai_config.json</code>），不会写进分享包、不会上传、不会进入 git/SVN。</p>
+      <label class="field"><span>接口协议</span>
+        <select id="aiCfgProto">
+          <option value="openai">OpenAI 兼容（DeepSeek / 通义 等）</option>
+          <option value="claude">Claude (Anthropic)</option>
+        </select>
+      </label>
+      <label class="field"><span>服务地址 baseURL</span>
+        <input type="text" id="aiCfgBase" placeholder="https://api.deepseek.com/v1" />
+      </label>
+      <label class="field"><span>API Key</span>
+        <input type="password" id="aiCfgKey" placeholder="填入 API Key" />
+      </label>
+      <label class="field"><span>模型名称</span>
+        <input type="text" id="aiCfgModel" placeholder="deepseek-chat" />
+      </label>
+      <div class="ai-cfg-actions">
+        <button type="button" id="aiCfgSave" class="primary">保存</button>
+        <button type="button" id="aiCfgCancel">取消</button>
+      </div>
+    </div>
+  </dialog>
+
   <!-- ============ 拖拽导入遮罩 #dropOverlay ============ -->
   <div id="dropOverlay" hidden>
     <div class="do-inner">
@@ -481,5 +529,7 @@
   <script src="/static/export.js"></script>
   <!-- 白天 / 夜间主题切换 -->
   <script src="/static/theme.js"></script>
+  <!-- AI 剪辑助手（依赖 App，放最后加载） -->
+  <script src="/static/ai.js"></script>
 </body>
 </html>

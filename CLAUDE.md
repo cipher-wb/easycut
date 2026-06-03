@@ -26,7 +26,7 @@
 ## 关键文件
 | 文件 | 职责 |
 |------|------|
-| `server.py` | HTTP API：静态资源 / Range 视频流 `/api/stream` / 文件对话框 `/api/pick`,`/api/pick-save` / 拖拽上传 `/api/upload`(存 media_store) / 缩略图 `/api/thumb` / 字体 `/api/fonts` / 导出 `/api/export`,`/api/export/status` / 工程 `/api/projects`,`/api/projects/save|load|delete|rename` / 重新链接 `/api/relink` |
+| `server.py` | HTTP API：静态资源 / Range 视频流 `/api/stream` / 文件对话框 `/api/pick`,`/api/pick-save` / 拖拽上传 `/api/upload`(存 media_store) / 缩略图 `/api/thumb` / 字体 `/api/fonts` / 导出 `/api/export`,`/api/export/status` / 工程 `/api/projects`,`/api/projects/save|load|delete|rename` / 重新链接 `/api/relink` / **AI 代理 `/api/ai`**(stdlib urllib 转发用户自配大模型，Key 留后端、无 CORS) + 配置 `/api/ai/config`(GET 脱敏读 / POST 写 `ai_config.json`) |
 | `ffmpeg_build.py` | 由 project 模型生成多轨合成滤镜图与参数（overlay 画中画 + drawtext 中文 + amix 混音 + setpts/atempo 变速），走 `-filter_complex_script` |
 | `picker.py` | 系统「打开/另存为」对话框（tkinter 独立子进程，JSON 输出） |
 | `static/app.js` | 唯一状态源 `project` + 撤销重做 + 事件总线 `bus` + `api.*` + 素材库 + 属性面板 + 导入 + 工程序列化/加载/脏标记/relink |
@@ -37,6 +37,8 @@
 | `static/projects.js` | 工程系统 UI：工程面板（启动弹出）/ 保存/另存为对话框 / 离线横幅 / relink 流程 |
 | `static/export.js` | 导出流程（pick-save → /api/export → 轮询进度） |
 | `static/theme.js` | 白天/夜间主题切换（`#btnTheme`，data-theme=dark，localStorage `qj-theme`） |
+| `static/ai.js` | **AI 剪辑助手**：自然语言→结构化剪辑指令。①指令注册表 `OPS`（op→{check,run}，加功能=注册新 op）②解析器（名字/前缀/选中/"中间1/3"等→id/秒）③解释器（整体校验→删除/导出确认→单步撤销执行）④AI 桥（系统提示注入指令表+工程快照→`/api/ai`→只输出 `{say,commands}` JSON→校验不过自动修复≤2 次）。全部编辑走 `App.*` mutator，撤销/刷新自动正确。面板 `#aiPanel`（同层并排可拖宽）、设置 `#aiConfigDialog`、顶栏 `#btnAi`。调试入口 `window.QJAi.run(cmds)` |
+| `ai_config.json` | AI 配置（protocol/baseURL/**apiKey**/model），后端读写、原子写。**已 .gitignore，含密钥，绝不进仓库/不分发** |
 | `projects/`、`media_store/` | 运行时用户数据（工程库 / 持久素材副本），**已 .gitignore** |
 | `_build/` | 设计文档与实测记录（contract / ffmpeg_recipe / engine / timeline / speed / project_design 等），**已 .gitignore，不进仓库**；属内部脚手架 |
 
