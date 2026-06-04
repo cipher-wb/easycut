@@ -13,19 +13,27 @@
 - 原型参考：`易剪/轻剪-Claude风格/`（设计稿，非运行代码）。
 
 ## 项目是什么
-**轻剪 EasyCut** —— 一个零安装、可离线的**本地网页版多轨视频剪辑工具**（面向非专业用户给视频加中文说明、做画中画/变速/简单剪辑拼接）。
-- 后端：`server.py`，**纯 Python 标准库** HTTP 服务，`subprocess` 调用本机 `ffmpeg`/`ffprobe`。禁止引入 pip 依赖、禁止 Flask 等框架。
+**轻剪 EasyCut** —— 一个零安装、可离线的**本地多轨视频剪辑桌面工具**（面向非专业用户给视频加中文说明、做画中画/变速/简单剪辑拼接）。形态是「本地网页 + 原生窗口外壳」：网页负责 UI，一个本地 Python 进程负责调 ffmpeg/读写文件。
+- 后端：`server.py`，**核心逻辑坚持 Python 标准库** HTTP 服务，`subprocess` 调用本机 `ffmpeg`/`ffprobe`。**禁止 Flask 等 Web 框架**；**剪辑/导出/工程等核心逻辑禁止引入 pip 依赖**。
 - 前端：`static/`，**纯原生 HTML/CSS/JS**，无框架、无 CDN、必须可离线。
+- **唯一允许的 pip 依赖范围 = 桌面外壳/打包**（`pywebview`、将来 `pyinstaller`），见 `requirements.txt`；且必须可选——没装也能靠浏览器回退跑起来。除此之外一律标准库。
 - 所有文本文件 UTF-8（无 BOM）；`启动.bat` 必须保持**纯 ASCII**（中文会在某些 cmd 代码页下乱码导致启动失败）。
 
-## 形态：桌面版（浏览器应用窗口外壳）
-**轻剪是「桌面应用」**，但外壳不引任何依赖：用本机 **Edge/Chrome 的 `--app` 模式**把网页渲染成一个**无地址栏/无标签页的独立窗口**（看着像原生软件）。第一版**不打包安装包**，打开即用；稳定后再考虑 pywebview/Tauri 真打包。
-- 实现在 `server.py`：`find_app_browser()`（winreg App Paths → 常见安装路径 → PATH，优先 Edge 再 Chrome）+ `launch_app_window(url)`（`--app=URL --user-data-dir=APP_PROFILE_DIR`，独立 profile 保证进程随窗口关闭而退；带 `--no-first-run` 等）。`main()` 默认走桌面模式：后台线程跑 `serve_forever`，主线程 `proc.wait()` 盯应用窗口，**关窗即 `httpd.shutdown()` 退出**。找不到浏览器→回退 `webbrowser.open` 老模式。`--no-app`/`--server-only` 强制老的浏览器标签模式（开发用）。
-- 用户入口：`轻剪 桌面版.vbs`（静默，pyw/pythonw 跑，**无黑窗**）；`启动.bat`（保留命令行日志窗，排错用）。两者都 ASCII-only。
+## 形态：桌面版（pywebview 原生窗口，三级回退）
+**轻剪是「桌面应用」**：`main()` 默认桌面模式 = 后台线程跑 `serve_forever`，主线程承载一个桌面外壳窗口，**关窗即 `httpd.shutdown()` 退出**。外壳按可用性三级回退：
+1. **首选 `run_native_window(url)`** —— `import webview`（pywebview，Windows 走自带 **WebView2** 运行时 + pythonnet）。真·原生窗口，不依赖外部浏览器；`webview.start()` 必须在**主线程**、阻塞至窗口关闭。**这是要打包成 exe 的目标形态。**
+2. **回退① `launch_app_window(url)`** —— 未装 pywebview 时，用本机 **Edge/Chrome `--app` 模式**（`find_app_browser()`：winreg App Paths→常见路径→PATH，优先 Edge）开无地址栏窗口，独立 `APP_PROFILE_DIR` 保证随窗口关闭而退。
+3. **回退② `webbrowser.open`** —— 连浏览器都没有时，开普通标签（保留控制台）。
+- `--no-app`/`--server-only`/`--browser` 任一参数 → 强制浏览器标签模式（开发用）。
+- 用户入口：`轻剪.pyw`（`.pyw` 由 pythonw 运行，**无黑窗**，已替代旧的 VBS——VBScript 被微软弃用）；`启动.bat`（保留命令行日志窗，排错用，纯 ASCII）。
+- 打包路线（稳定后）：PyInstaller 把 `server.py`+`static/` 打成单 exe（pywebview 一起进去），同事零 Python 依赖；ffmpeg 是否一并打包另议。**不要用 Tauri**（要 Rust/Node/VS Build Tools 工具链 + 重写后端，对保留 Python 的场景过重，已评估否决）。
 
 ## 怎么运行 / 怎么测
-- 运行：双击 `轻剪 桌面版.vbs`（无控制台桌面窗口）或 `启动.bat`（带日志），或 `py -3 server.py`（默认开应用窗口；`--no-app` 走浏览器标签，监听 `127.0.0.1:8765`，端口占用自动 +1）。
-- 测桌面模式：`find_app_browser()` 应返回 msedge 路径；起服后应用窗口会拉全部静态资源（日志里一串 `GET /static/*.js 200`）；关掉**带 `jianjianji_work\appwindow` 的 msedge 进程**后服务应自动停（端口变 DOWN、python 退出）。**别误杀用户日常 msedge**——按命令行里的 profile 目录过滤。
+- 装外壳依赖（一次）：`python -m pip install -r requirements.txt`（装 pywebview；不装则自动回退 Edge --app）。
+- 运行：双击 `轻剪.pyw`（无控制台原生窗口）或 `启动.bat`（带日志），或 `py -3 server.py`（默认开桌面窗口；`--no-app` 走浏览器标签，监听 `127.0.0.1:8765`，端口占用自动 +1）。
+- 测原生窗口：起服后会拉起 WebView2（进程名 `msedgewebview2.exe`，**注意按命令行 user-data-dir 过滤——本机 clash-verge 也在用 WebView2，别误杀**；它还会拦本地 curl/Invoke-WebRequest，校验 HTTP 用 `curl --noproxy '*'` 或 `Get-NetTCPConnection`）。pywebview 的 `webview.start()` 在窗口关闭后返回 → 触发 `httpd.shutdown()`。
+- 测 Edge 回退：`find_app_browser()` 应返回 msedge 路径；关掉**带 `jianjianji_work\appwindow` 的 msedge 进程**后服务应自动停。**别误杀用户日常 msedge**。
+- 测完务必停掉本次起的 `python/pythonw server.py` 进程（force-kill 时其 WebView2 子进程会随父退出）。
 - ffmpeg/ffprobe 已确认装在本机（WinGet 目录或 PATH），`ffmpeg_build.find_ffmpeg/find_ffprobe` 会自动定位。
 - **验证方式**：本机有全局 `playwright`（`npm root -g`）+ msedge。可用 headless 脚本打开 `http://127.0.0.1:8765/` 做 DOM/交互断言与截图；后端导出可直接 `import ffmpeg_build` 用 lavfi 造源真跑 ffmpeg + ffprobe 校验。改完 JS 跑 `node --check`，改完 Python 跑 `ast.parse` 自检。测完记得停掉占用 8765 的进程。
 

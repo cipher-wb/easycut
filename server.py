@@ -1723,6 +1723,26 @@ def launch_app_window(url):
         return None, None
 
 
+def run_native_window(url):
+    """首选桌面外壳：pywebview 原生窗口（Windows 走 WebView2）。
+    成功打开并阻塞至窗口关闭后返回 True；未安装/初始化失败返回 False（交上层回退）。
+    注意：pywebview 的 GUI 事件循环必须跑在主线程。"""
+    try:
+        import webview  # 仅在已安装时启用；未装则回退浏览器，不强制依赖
+    except Exception:
+        return False
+    try:
+        webview.create_window(
+            "轻剪 EasyCut", url,
+            width=1440, height=900, min_size=(1024, 640),
+        )
+        webview.start()  # 阻塞主线程，直到窗口关闭
+        return True
+    except Exception as e:
+        print("[提示] 原生窗口(pywebview)启动失败，回退浏览器：%s" % e)
+        return False
+
+
 def main():
     if not os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
         print("[启动错误] 未找到 static/index.html，前端文件可能缺失。")
@@ -1755,14 +1775,26 @@ def main():
     want_app = not any(a in ("--no-app", "--server-only", "--browser") for a in sys.argv[1:])
 
     if want_app:
-        # 后台线程跑服务，主线程盯着应用窗口；窗口一关就停服退出
+        # 后台线程跑服务，主线程承载桌面外壳；外壳一关就停服退出
         srv_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         srv_thread.start()
         time.sleep(0.4)  # 等服务起来再连
+
+        # 首选：pywebview 原生窗口（WebView2，真·桌面 app，不依赖外部浏览器）
+        print("-" * 60)
+        print("  正在打开桌面窗口…（关闭窗口即可退出程序）")
+        print("-" * 60)
+        if run_native_window(url):
+            httpd.shutdown()
+            httpd.server_close()
+            print("[停止] 窗口已关闭，服务已停止。")
+            return
+
+        # 回退①：Edge/Chrome 应用窗口（未装 pywebview 时）
         proc, name = launch_app_window(url)
         if proc is not None:
             print("-" * 60)
-            print("  已以桌面应用窗口打开（%s 应用模式）。" % name)
+            print("  未启用原生窗口，改用浏览器应用模式（%s）。" % name)
             print("  关闭该窗口即可退出程序，无需手动停服。")
             print("-" * 60)
             try:
@@ -1778,7 +1810,7 @@ def main():
                 httpd.server_close()
                 print("[停止] 应用窗口已关闭，服务已停止。")
             return
-        # 没找到浏览器 → 回退普通模式
+        # 回退②：连浏览器都没有 → 普通浏览器标签模式
         print("-" * 60)
         print("  未找到 Edge/Chrome，回退为浏览器标签模式。")
         print("  请保持本窗口开启；按 Ctrl+C 可停止服务。")
