@@ -51,6 +51,7 @@
   --clip-sel:     #D97757;
   --playhead:     #C2603F;
   --snap:         #D9A441;
+  --marker:       #3B82C4;
 
   --shadow:     0 1px 2px rgba(60,52,38,.06), 0 4px 14px rgba(60,52,38,.07);
   --shadow-pop: 0 8px 30px rgba(60,52,38,.16);
@@ -110,6 +111,7 @@
   --clip-sel:     #DD8160;
   --playhead:     #DE806C;
   --snap:         #D9A441;
+  --marker:       #5BA3DE;
 
   --shadow:     0 1px 2px rgba(0,0,0,.3), 0 4px 16px rgba(0,0,0,.32);
   --shadow-pop: 0 10px 34px rgba(0,0,0,.5);
@@ -525,6 +527,18 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
 }
 #timelineRuler .tl-tick.minor { border-left-color: var(--line-2); }
 #timelineRuler .tl-tick-label { pointer-events: none; }
+/* 特殊标记旗子（@标记，给 AI 引用） */
+#timelineRuler .tl-marker {
+  position: absolute; top: 2px; transform: translateX(-50%);
+  z-index: 24; pointer-events: auto; cursor: pointer;
+  display: flex; flex-direction: column; align-items: center;
+}
+#timelineRuler .tl-marker .tl-marker-label {
+  font-size: 10px; font-weight: 700; line-height: 1.5; letter-spacing: .5px;
+  padding: 0 6px; border-radius: 4px; white-space: nowrap;
+  background: var(--marker); color: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.3);
+}
+#timelineRuler .tl-marker::after { content: ""; width: 2px; height: 8px; background: var(--marker); }
 
 /* 轨道行区 */
 #tracksArea { position: relative; }
@@ -1066,6 +1080,19 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
 }
 #aiInput:focus { outline: none; border-color: var(--accent); }
 #aiSend { flex: 0 0 auto; align-self: stretch; min-width: 56px; }
+/* @标记 自动联想下拉（挂在 body 上，定位在输入框上方） */
+.ai-ac {
+  position: fixed; z-index: 100020; max-height: 200px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--r-sm);
+  box-shadow: var(--shadow-pop); padding: 4px;
+}
+.ai-ac-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  padding: 6px 9px; border-radius: 5px; cursor: pointer; font-size: 13px; color: var(--text);
+}
+.ai-ac-item b { color: var(--marker); font-weight: 700; }
+.ai-ac-item span { color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ai-ac-item.sel, .ai-ac-item:hover { background: var(--accent-soft); }
 
 /* AI 设置对话框 */
 #aiConfigDialog { border: none; border-radius: var(--r-md); box-shadow: var(--shadow-pop); padding: 0; background: transparent; }

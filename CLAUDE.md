@@ -43,15 +43,15 @@
 | `server.py` | HTTP API：静态资源 / Range 视频流 `/api/stream` / 文件对话框 `/api/pick`(桌面下走 pywebview 原生对话框、零拷贝引用原路径，否则回退 tkinter),`/api/pick-save` / **引用导入 `/api/link`**(按文件名认领 pywebview 拖入的真实路径，零拷贝引用入库) / 能力探测 `/api/caps`(nativeImport=是否支持引用导入) / 打开所在文件夹 `/api/reveal`(explorer /select 选中文件，本机服务各模式可用) / 拖拽上传 `/api/upload`(复制存 media_store，浏览器回退用) / 缩略图 `/api/thumb` / 字体 `/api/fonts` / 导出 `/api/export`,`/api/export/status` / 工程 `/api/projects`,`/api/projects/save|load|delete|rename` / 重新链接 `/api/relink` / **AI 代理 `/api/ai`**(stdlib urllib 转发用户自配大模型，Key 留后端、无 CORS) + 配置 `/api/ai/config`(GET 脱敏读 / POST 写 `ai_config.json`) |
 | `ffmpeg_build.py` | 由 project 模型生成多轨合成滤镜图与参数（overlay 画中画 + drawtext 中文 + amix 混音 + setpts/atempo 变速），走 `-filter_complex_script` |
 | `picker.py` | 系统「打开/另存为」对话框（tkinter 独立子进程，JSON 输出） |
-| `static/app.js` | 唯一状态源 `project` + 撤销重做 + 事件总线 `bus` + `api.*` + 素材库 + 属性面板 + 导入 + 工程序列化/加载/脏标记/relink + **评论批注 mutator**（addComment/updateComment/removeComment/setCommentStatus，进 snapshot/序列化） |
-| `static/timeline.js` | 多轨时间轴渲染与交互（拖动/裁剪/磁吸/分割/变速拖拽/缩放/快捷键分发入口）+ **评论标签层**（整轨带 + 每轨贴标签、贪心分层 `packLanes` 自动错开、右键加评论 / 编辑 / 区间 A–B 手柄） |
+| `static/app.js` | 唯一状态源 `project` + 撤销重做 + 事件总线 `bus` + `api.*` + 素材库 + 属性面板 + 导入 + 工程序列化/加载/脏标记/relink + **评论批注 mutator**（addComment/…）+ **标记 mutator**（addMarker/updateMarker/removeMarker/nextMarkerNo，进 snapshot/序列化，发 `markers:changed`） |
+| `static/timeline.js` | 多轨时间轴渲染与交互（拖动/裁剪/磁吸/分割/变速拖拽/缩放/快捷键分发入口）+ **评论标签层**（整轨带 + 每轨贴标签、贪心分层 `packLanes` 自动错开、右键加评论 / 编辑 / 区间 A–B 手柄）+ **标记旗子层**（刻度尺蓝色 `.tl-marker` 编号旗、右键新建/改名/删除、点旗子 seek、随 `markers:changed`/`renderRuler` 重渲） |
 | `static/player.js` | 多视频同步合成预览引擎（主时钟 + 每轨一个 `<video>` + 漂移纠偏 + playbackRate 变速） |
 | `static/overlay.js` | 画中画与文字的选中变换手柄（拖动/缩放回写百分比）。**文字框 8 向手柄(nw/n/ne/e/se/s/sw/w)只改 wPct/hPct，不动字号**；单独的字号手柄(`.tb-fonth`)改 fontSizePct |
 | `static/shortcuts.js` | 剪映/CapCut 风格快捷键 + 「⌨ 快捷键」说明面板（键表与面板同源）。Ctrl+S=保存工程 / Ctrl+Shift+S=另存为 / Ctrl+E=导出 |
 | `static/projects.js` | 工程系统 UI：工程面板（启动弹出）/ 保存/另存为对话框 / 离线横幅 / relink 流程 |
 | `static/export.js` | 导出流程（pick-save → /api/export → 轮询进度） |
 | `static/theme.js` | 白天/夜间主题切换（`#btnTheme`，data-theme=dark，localStorage `qj-theme`） |
-| `static/ai.js` | **AI 剪辑助手**：自然语言→结构化剪辑指令。①指令注册表 `OPS`（op→{check,run}，加功能=注册新 op）②解析器（名字/前缀/选中/"中间1/3"等→id/秒）③解释器（整体校验→删除/导出确认→单步撤销执行）④AI 桥（系统提示注入指令表+工程快照→`/api/ai`→只输出 `{say,commands}` JSON→校验不过自动修复≤2 次）。全部编辑走 `App.*` mutator，撤销/刷新自动正确。面板 `#aiPanel`（同层并排可拖宽）、设置 `#aiConfigDialog`、顶栏 `#btnAi`。**`executeComments()`**：把时间轴待执行批注汇成结构化清单喂 AI→出 `{say,commands,done}`→**总是先列计划确认**→整批一步撤销执行→**执行成功的批注 removeComment 删除（不保留）**（面板「▶ 执行批注 (N)」#btnRunComments）。调试入口 `window.QJAi.run(cmds)` / `QJAi.runComments()` |
+| `static/ai.js` | **AI 剪辑助手**：自然语言→结构化剪辑指令。**输入框 @标记 自动联想**（输入 @ 弹时间轴标记列表，↑↓/回车/Tab/点选插入 `@N号`）；stateSnapshot 注入标记表(label→秒)、系统提示说明 @标记=时间。①指令注册表 `OPS`（op→{check,run}，加功能=注册新 op）②解析器（名字/前缀/选中/"中间1/3"等→id/秒）③解释器（整体校验→删除/导出确认→单步撤销执行）④AI 桥（系统提示注入指令表+工程快照→`/api/ai`→只输出 `{say,commands}` JSON→校验不过自动修复≤2 次）。全部编辑走 `App.*` mutator，撤销/刷新自动正确。面板 `#aiPanel`（同层并排可拖宽）、设置 `#aiConfigDialog`、顶栏 `#btnAi`。**`executeComments()`**：把时间轴待执行批注汇成结构化清单喂 AI→出 `{say,commands,done}`→**总是先列计划确认**→整批一步撤销执行→**执行成功的批注 removeComment 删除（不保留）**（面板「▶ 执行批注 (N)」#btnRunComments）。调试入口 `window.QJAi.run(cmds)` / `QJAi.runComments()` |
 | `ai_config.json` | AI 配置（protocol/baseURL/**apiKey**/model），后端读写、原子写。**已 .gitignore，含密钥，绝不进仓库/不分发**。仓库内提交 `ai_config.example.json` 作模板（无真实 key；`load_ai_config` 只读 `AI_DEFAULT` 里的键，模板里的 `_说明` 等额外键被忽略） |
 | `projects/`、`media_store/` | 运行时用户数据（工程库 / 持久素材副本），**已 .gitignore** |
 | `_build/` | 设计文档与实测记录（contract / ffmpeg_recipe / engine / timeline / speed / project_design 等），**已 .gitignore，不进仓库**；属内部脚手架 |
@@ -79,7 +79,9 @@ project = {
   // 时间轴批注（导演式剪辑指令，给 AI 执行；不直接改剪辑）。见 §评论系统
   comments: [ { id, text, kind:"point"|"range", scope:"clip"|"global",
                 clipId?, at?|start?|end?,        // 时间轴绝对秒：point 用 at；range 用 start/end
-                status:"pending"|"done"|"stale", createdAt, executedAt? } ]
+                status:"pending"|"done"|"stale", createdAt, executedAt? } ],
+  // 时间轴特殊标记（点位）：渲染成刻度尺蓝色编号旗子；AI 聊天框 @标记名 引用 = 对应秒数。
+  markers: [ { id, label, at } ]   // label 默认 "N号"（自动编号）；进 snapshot/序列化/撤销
 }
 ```
 **不变量**（改任何相关代码都要保持一致，否则预览/时间轴/导出会不同步）：

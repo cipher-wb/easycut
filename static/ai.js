@@ -417,6 +417,11 @@
       '素材库（轨道数组顺序即图层 z 序，[0]在最底层）：', media,
       '轨道：', tracks];
     if (sel && sel.clipId) lines.push('当前选中片段 id=' + sel.clipId + '（可用 clip:"selected" 引用）');
+    var mks = (App.getMarkers && App.getMarkers()) || [];
+    if (mks.length) {
+      lines.push('时间轴特殊标记（用户用 @标记名 引用 = 对应的时间轴秒数）：');
+      lines.push(mks.map(function (m) { return '  - @' + m.label + ' = ' + n1(m.at || 0) + 's'; }).join('\n'));
+    }
     return lines.join('\n');
   }
 
@@ -452,6 +457,9 @@
 '【引用方式】',
 '- 片段 clip：可填 "selected"(当前选中) | "last"(你最近添加的) | 素材名(找用了该素材的片段) | {"id":"clip_x"}。',
 '- 轨道 track：可填 "first_video"/"last_video" | "new"(新建) | 轨道名 | 数组序号(0在最底层)。',
+'- 标记 @标记名：用户消息里出现 "@1号" 这类，指【当前工程状态】里同名标记的时间轴秒数；把它当作时间(at/start/in/out)用。两个标记可圈出一个区间。',
+'  例：「在 @1号 处分割 开场」=> [{"op":"split_clip","clip":"开场","at":<1号的秒数>}]。',
+'  例：「把 @1号 到 @2号 之间的 开场 加速2倍」=> 先在两处分割再对中间段 set_speed（按工程状态里的秒数算）。',
 '',
 '【规则】',
 '- 只能引用上面【当前工程状态】里真实存在的素材名/轨道；几何与比例一律用 0~1；时间用秒。',
@@ -729,9 +737,64 @@ stateSnapshot()
       var m = msgs[+btn.getAttribute('data-idx')]; if (m) copyText(m.text);
     });
 
-    function send() { var v = (elInput.value || '').trim(); if (!v || pending) return; elInput.value = ''; askAI(v); }
+    function send() { acClose(); var v = (elInput.value || '').trim(); if (!v || pending) return; elInput.value = ''; askAI(v); }
     if (elSend) elSend.addEventListener('click', send);
-    if (elInput) elInput.addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
+
+    // ---- @标记 自动联想：输入 @ 时弹出时间轴上已有的标记，选中即插入 ----
+    var acEl = null, acItems = [], acIndex = -1, acTokenStart = -1;
+    function acClose() { if (acEl) { acEl.remove(); acEl = null; } acItems = []; acIndex = -1; acTokenStart = -1; }
+    function acUpdate() {
+      if (!elInput) return;
+      var val = elInput.value, pos = elInput.selectionStart || 0;
+      var m = /@([^\s@]*)$/.exec(val.slice(0, pos));   // 光标前最近的未完成 @token
+      if (!m) { acClose(); return; }
+      var q = m[1].toLowerCase();
+      acTokenStart = pos - m[0].length;
+      acItems = ((App.getMarkers && App.getMarkers()) || []).filter(function (mk) {
+        return q === '' || ('' + (mk.label || '')).toLowerCase().indexOf(q) >= 0;
+      });
+      if (!acItems.length) { acClose(); return; }
+      acIndex = 0; acRender();
+    }
+    function acRender() {
+      if (!acEl) { acEl = document.createElement('div'); acEl.className = 'ai-ac'; document.body.appendChild(acEl); }
+      acEl.innerHTML = '';
+      acItems.forEach(function (mk, i) {
+        var it = document.createElement('div');
+        it.className = 'ai-ac-item' + (i === acIndex ? ' sel' : '');
+        it.innerHTML = '<b>@' + escapeHtml(mk.label) + '</b><span>' + n1(mk.at || 0) + 's</span>';
+        it.addEventListener('mousedown', function (e) { e.preventDefault(); acAccept(i); });
+        acEl.appendChild(it);
+      });
+      var r = elInput.getBoundingClientRect();
+      acEl.style.left = r.left + 'px';
+      acEl.style.width = Math.max(180, r.width) + 'px';
+      acEl.style.bottom = (window.innerHeight - r.top + 6) + 'px';
+    }
+    function acAccept(i) {
+      if (i == null) i = acIndex;
+      var mk = acItems[i]; if (!mk) { acClose(); return; }
+      var val = elInput.value, pos = elInput.selectionStart || 0;
+      var insert = '@' + mk.label + ' ';
+      elInput.value = val.slice(0, acTokenStart) + insert + val.slice(pos);
+      var np = acTokenStart + insert.length; elInput.setSelectionRange(np, np);
+      acClose(); elInput.focus();
+    }
+    function escapeHtml(s) { return ('' + s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+
+    if (elInput) {
+      elInput.addEventListener('input', acUpdate);
+      elInput.addEventListener('blur', function () { setTimeout(acClose, 120); });
+      elInput.addEventListener('keydown', function (e) {
+        if (acEl && acItems.length) {   // 联想框打开时，方向键/回车/Tab 用于选标记
+          if (e.key === 'ArrowDown') { e.preventDefault(); acIndex = (acIndex + 1) % acItems.length; acRender(); return; }
+          if (e.key === 'ArrowUp') { e.preventDefault(); acIndex = (acIndex - 1 + acItems.length) % acItems.length; acRender(); return; }
+          if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); acAccept(); return; }
+          if (e.key === 'Escape') { e.preventDefault(); acClose(); return; }
+        }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+      });
+    }
 
     if (dlg) {
       var sv = dlg.querySelector('#aiCfgSave'); if (sv) sv.addEventListener('click', saveConfig);

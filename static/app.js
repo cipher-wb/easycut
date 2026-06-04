@@ -40,7 +40,8 @@
     output: { width: 1920, height: 1080, fps: 30, crf: 18, keepAudio: true },
     media: [],
     tracks: [],
-    comments: []   // 时间轴批注（给 AI 的剪辑指令）；见 §14.2
+    comments: [],  // 时间轴批注（给 AI 的剪辑指令）；见 §14.2
+    markers: []    // 时间轴特殊标记（点位，给 AI 用 @标记名 引用）：{ id, label, at }
   };
 
   // 默认两条视频轨（contract_v2 §1.3）。
@@ -322,7 +323,7 @@
   // 撤销快照只含“项目编辑内容”= output + tracks（contract_v2 §6.8）。
   // media（素材库）独立管理、不参与 undo/redo（addMedia/removeMedia 不入栈），
   // 故快照不含 media——否则撤销一次片段编辑会把之后导入的素材一并回退。
-  function snapshot() { return JSON.parse(JSON.stringify({ output: project.output, tracks: project.tracks, comments: project.comments })); }
+  function snapshot() { return JSON.parse(JSON.stringify({ output: project.output, tracks: project.tracks, comments: project.comments, markers: project.markers })); }
 
   // 就地把 project 内容替换为 snap（保持 project 引用与 output/tracks 数组引用）。
   // 不触碰 project.media（媒体库不在快照内）。
@@ -337,6 +338,11 @@
     project.comments.length = 0;
     var sc = snap.comments || [];
     for (var k = 0; k < sc.length; k++) project.comments.push(sc[k]);
+    // markers：同样清空重填
+    if (!project.markers) project.markers = [];
+    project.markers.length = 0;
+    var sm = snap.markers || [];
+    for (var km = 0; km < sm.length; km++) project.markers.push(sm[km]);
   }
 
   function pushHistory() {
@@ -874,6 +880,47 @@
     if (status === 'done') c.executedAt = Date.now();
     markDirty();
     bus.emit('comments:changed', {});
+  }
+
+  /* ===================================================================== *
+   * 14.3 时间轴特殊标记 marker（点位；给 AI 用 @标记名 引用做剪辑）
+   * ===================================================================== */
+  function getMarkers() { if (!project.markers) project.markers = []; return project.markers; }
+  function _markerIndex(id) { var a = getMarkers(); for (var i = 0; i < a.length; i++) if (a[i].id === id) return i; return -1; }
+  function getMarker(id) { var i = _markerIndex(id); return i >= 0 ? project.markers[i] : null; }
+  // 取一个未占用的标记编号（1号/2号…自动递增；删了中间号会补回最小空缺）
+  function nextMarkerNo() {
+    var used = {};
+    getMarkers().forEach(function (m) { var mm = /^(\d+)号$/.exec(m.label || ''); if (mm) used[+mm[1]] = 1; });
+    var n = 1; while (used[n]) n++; return n;
+  }
+  function addMarker(at, label, opts) {
+    var m = {
+      id: nextId('mk'),
+      label: String(label != null && ('' + label).trim() !== '' ? label : (nextMarkerNo() + '号')),
+      at: Math.max(0, num(at, getPlayhead()))
+    };
+    if (!(opts && opts.noHistory)) pushHistory();
+    getMarkers().push(m);
+    markDirty();
+    bus.emit('markers:changed', {});
+    return m.id;
+  }
+  function updateMarker(id, patch, opts) {
+    var m = getMarker(id); if (!m) return;
+    patch = patch || {};
+    if (!(opts && opts.noHistory)) pushHistory();
+    if (patch.label != null) m.label = String(patch.label);
+    if (patch.at != null) m.at = Math.max(0, num(patch.at, m.at));
+    markDirty();
+    bus.emit('markers:changed', {});
+  }
+  function removeMarker(id, opts) {
+    var i = _markerIndex(id); if (i < 0) return;
+    if (!(opts && opts.noHistory)) pushHistory();
+    project.markers.splice(i, 1);
+    markDirty();
+    bus.emit('markers:changed', {});
   }
 
   // edge-trim 修剪（contract_v2 §6.4）。edge:"in"|"out"，deltaSec 为该边位移。
@@ -2073,7 +2120,8 @@
     });
     var tracks = JSON.parse(JSON.stringify(project.tracks));
     var comments = JSON.parse(JSON.stringify(project.comments || []));
-    return { output: out, media: media, tracks: tracks, comments: comments };
+    var markers = JSON.parse(JSON.stringify(project.markers || []));
+    return { output: out, media: media, tracks: tracks, comments: comments, markers: markers };
   }
 
   // 把某 media 的越界视频 clips clamp 到 [0, newDuration]；丢弃整段越界(out<=in 或 in>=dur)。
@@ -2125,6 +2173,10 @@
     project.comments.length = 0;
     (lp.comments || []).forEach(function (c) { if (c) project.comments.push(c); });
     _revalidateComments();
+    // 特殊标记：就地重填
+    if (!project.markers) project.markers = [];
+    project.markers.length = 0;
+    (lp.markers || []).forEach(function (m) { if (m) project.markers.push(m); });
 
     // 3) 应用 mediaStatus（权威）：offline/streamId/dims/duration/fps/hasAudio + thumbUrl 重建。
     var statusById = {};
@@ -2200,6 +2252,7 @@
     project.media.length = 0;
     project.tracks.length = 0;
     project.comments.length = 0;
+    if (project.markers) project.markers.length = 0;
     initDefaultTracks();   // 复用默认 2 条视频轨逻辑（保持 tracks 数组引用）
 
     undoStack.length = 0; redoStack.length = 0;
@@ -2286,6 +2339,8 @@
     rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip, closeGap: closeGap,
     getComments: getComments, getComment: getComment, addComment: addComment,
     updateComment: updateComment, removeComment: removeComment, setCommentStatus: setCommentStatus,
+    getMarkers: getMarkers, getMarker: getMarker, addMarker: addMarker,
+    updateMarker: updateMarker, removeMarker: removeMarker, nextMarkerNo: nextMarkerNo,
     setClipTransform: setClipTransform, setClipSpeed: setClipSpeed, getClip: getClip,
     duplicateClip: duplicateClip, copyClip: copyClip, pasteClip: pasteClip,
     createFreezeClip: createFreezeClip, freezeAtPlayhead: freezeAtPlayhead, setFreezeProp: setFreezeProp,

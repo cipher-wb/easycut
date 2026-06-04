@@ -391,6 +391,23 @@
     // replaceChildren 会清掉播放头标记，重建后补回并对齐
     ensureRulerPlayhead();
     if (elRulerPlayhead) elRulerPlayhead.style.left = timeToX(playhead()) + 'px';
+    renderMarkers();   // 特殊标记的旗子（被 replaceChildren 清掉，这里重建）
+  }
+
+  /* ---------- 时间轴特殊标记（@标记，给 AI 引用） ---------- */
+  function markers() { return (App.getMarkers && App.getMarkers()) || []; }
+  function renderMarkers() {
+    if (!elRuler) return;
+    // 旧旗子先清（renderRuler 的 replaceChildren 已清，这里兜底重复调用时也安全）
+    Array.prototype.slice.call(elRuler.querySelectorAll('.tl-marker')).forEach(function (n) { n.remove(); });
+    markers().forEach(function (mk) {
+      var flag = el('div', 'tl-marker');
+      flag.style.left = timeToX(mk.at || 0) + 'px';
+      flag.dataset.markerId = mk.id;
+      flag.title = mk.label + ' · ' + fmt(mk.at || 0) + '（点击定位；点旗子改名/删除）';
+      flag.appendChild(el('span', 'tl-marker-label', mk.label));
+      elRuler.appendChild(flag);
+    });
   }
 
   /* 刻度尺上的播放头标记：一个好抓的手柄 + 向下延伸的竖线（跨刻度尺与批注带，
@@ -1026,7 +1043,17 @@
     else bus.emit('seek', t);
   }
   function bindRuler() {
-    if (elRuler) elRuler.addEventListener('pointerdown', function (e) { e.preventDefault(); startScrub(e); });
+    if (elRuler) elRuler.addEventListener('pointerdown', function (e) {
+      // 点标记旗子（左键）→ 精确定位到该标记；右键留给改名/删除菜单
+      var mflag = e.target.closest('.tl-marker');
+      if (mflag) {
+        if (e.button != null && e.button !== 0) return;
+        var mk = App.getMarker && App.getMarker(mflag.dataset.markerId);
+        if (mk) { e.preventDefault(); e.stopPropagation(); doSeek(mk.at || 0); }
+        return;
+      }
+      e.preventDefault(); startScrub(e);
+    });
     // 「整轨批注」带：空白处点击 = 跟刻度尺一样定位播放头；
     // 但点在已有批注标签/手柄上时不抢——留给原有的“打开/编辑批注”交互。
     if (elGlobalCmt) elGlobalCmt.addEventListener('pointerdown', function (e) {
@@ -1106,6 +1133,20 @@
   }
   function bindCommentInteractions() {
     function onCtx(e) {
+      // 特殊标记旗子：右键 → 改名 / 删除
+      var mflag = e.target.closest('.tl-marker');
+      if (mflag) {
+        e.preventDefault();
+        var mid = mflag.dataset.markerId, mk = App.getMarker && App.getMarker(mid);
+        showCmtMenu(e.clientX, e.clientY, [
+          { label: '✎ 重命名标记', fn: function () {
+              showCmtPopover(e.clientX, e.clientY, (mk && mk.label) || '', { onSave: function (txt) {
+                if (txt != null && ('' + txt).trim() !== '') App.updateMarker(mid, { label: ('' + txt).trim() }); } });
+            } },
+          { label: '🗑 删除标记', fn: function () { App.removeMarker(mid); } }
+        ]);
+        return;
+      }
       var tag = e.target.closest('.cmt-tag');
       if (tag) { e.preventDefault(); openTagEditor(tag, e.clientX, e.clientY); return; }
       var clipEl = e.target.closest('.clip');
@@ -1126,6 +1167,7 @@
         e.preventDefault();
         var atG = clientXToTime(e.clientX);
         showCmtMenu(e.clientX, e.clientY, [
+          { label: '🚩 在此新建标记 (' + (App.nextMarkerNo ? App.nextMarkerNo() + '号' : '') + ')', fn: function () { if (App.addMarker) { App.addMarker(atG); App.toast && App.toast('已加标记，可在 AI 聊天框用 @ 引用', 'info', 1800); } } },
           { label: '📍 在此点加整轨评论', fn: function () { addGlobalComment('point', { at: atG }, e.clientX, e.clientY); } },
           { label: '⟷ 加整轨区间评论', fn: function () { addGlobalComment('range', { start: atG, end: atG + 3 }, e.clientX, e.clientY); } }
         ]);
@@ -1259,6 +1301,7 @@
     bus.on('tracks:changed', function () { renderHeads(); renderTracks(); refreshToolbar(); });
     bus.on('clips:changed', renderAll);   // 兼容草案事件名
     bus.on('comments:changed', renderAll);   // 评论新增/改/删 → 重渲标签层
+    bus.on('markers:changed', renderRuler);   // 特殊标记新增/改/删 → 重渲旗子
     bus.on('selection:changed', onSelectionChanged);
     bus.on('time:update', function (p) { updatePlayhead(p && typeof p.t === 'number' ? p.t : (typeof p === 'number' ? p : playhead())); });
     bus.on('zoom:changed', function () { /* 自身触发，避免回环 */ });
