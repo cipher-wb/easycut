@@ -133,6 +133,8 @@
   }
   var api = {
     pick: function (multiple) { return postJson('/api/pick', { multiple: !!multiple }); },
+    link: function (names) { return postJson('/api/link', { names: names }); },
+    caps: function () { return jsonFetch('/api/caps'); },
     pickSave: function (suggestName) { return postJson('/api/pick-save', { suggestName: suggestName }); },
     upload: function (file) {
       var fd = new FormData();
@@ -155,6 +157,11 @@
     },
     relink: function (mediaId, path) { return postJson('/api/relink', { mediaId: mediaId, path: path }); }
   };
+
+  // 客户端能力：nativeImport=true 时导入「引用原文件不复制」（桌面 pywebview 窗口）。
+  // 默认 false（= 复制上传，最稳）；启动时探测一次。
+  var CAPS = { nativeImport: false };
+  api.caps().then(function (c) { if (c) CAPS.nativeImport = !!c.nativeImport; }).catch(function () {});
 
   /* ===================================================================== *
    * 6. toast 轻提示（emit 'toast' 也可触达；这里直接渲染）
@@ -448,19 +455,53 @@
       return m ? addMedia(m) : null;
     });
   }
+  // 把一批拖入的 File 解析成 mediaId（与 files 对齐，失败处为 null）。
+  // 桌面模式：先 api.link 按文件名认领真实路径「引用入库（不复制）」；认领不到的逐个回退复制上传。
+  // 浏览器模式：全部复制上传。
+  function resolveMediaIds(files) {
+    function uploadAt(i, label) {
+      setDropOverlayText((label || '复制中 ') + (i + 1) + '/' + files.length + ' …');
+      return importViaUpload(files[i]).catch(function (e) {
+        toast('导入失败（' + files[i].name + '）：' + e.message, 'error'); return null;
+      });
+    }
+    if (!CAPS.nativeImport) {
+      // 复制上传（逐个，保持顺序）
+      return files.reduce(function (chain, f, i) {
+        return chain.then(function (acc) { return uploadAt(i).then(function (id) { acc.push(id || null); return acc; }); });
+      }, Promise.resolve([]));
+    }
+    // 引用导入：一次性按文件名认领真实路径
+    setDropOverlayText('引用导入 …');
+    return api.link(files.map(function (f) { return f.name; })).then(function (res) {
+      var media = (res && res.media) || [];
+      var unmatched = {};
+      (res && res.unmatched || []).forEach(function (n) { unmatched[n] = true; });
+      if (res && res.skipped && res.skipped.length) toast('无法解析，已跳过：' + res.skipped.join('、'), 'error');
+      // 逐个落位：认领到→引用入库；没认领到(unmatched)→回退复制上传
+      return files.reduce(function (chain, f, i) {
+        return chain.then(function (acc) {
+          var m = media[i];
+          if (m) { acc.push(addMedia(m) || null); return acc; }
+          if (unmatched[f.name]) return uploadAt(i, '复制中 ').then(function (id) { acc.push(id || null); return acc; });
+          acc.push(null); return acc;
+        });
+      }, Promise.resolve([]));
+    }).catch(function () {
+      // /api/link 整体失败 → 全量回退复制上传，绝不丢素材
+      return files.reduce(function (chain, f, i) {
+        return chain.then(function (acc) { return uploadAt(i).then(function (id) { acc.push(id || null); return acc; }); });
+      }, Promise.resolve([]));
+    });
+  }
+
   function importFiles(fileList) {
     var files = [].slice.call(fileList || []).filter(function (f) { return /\.mp4$/i.test(f.name); });
     if (!files.length) { toast('请拖入 mp4 文件', 'error'); return Promise.resolve([]); }
-    var ids = [];
-    return files.reduce(function (chain, f, i) {
-      return chain.then(function () {
-        setDropOverlayText('上传中 ' + (i + 1) + '/' + files.length + ' …');
-        return importViaUpload(f).then(function (id) { if (id) ids.push(id); })
-          .catch(function (e) { toast('上传失败（' + f.name + '）：' + e.message, 'error'); });
-      });
-    }, Promise.resolve()).then(function () {
+    return resolveMediaIds(files).then(function (idArr) {
+      var ids = (idArr || []).filter(Boolean);
       hideDropOverlay();
-      if (ids.length) toast('已导入 ' + ids.length + ' 个视频到素材库', 'info', 1800);
+      if (ids.length) toast('已导入 ' + ids.length + ' 个视频到素材库' + (CAPS.nativeImport ? '（引用原文件）' : ''), 'info', 1800);
       return ids;
     });
   }
@@ -1333,25 +1374,22 @@
   // drop 到某视频轨：每个文件先 importViaUpload 入库，再 addClipFromMedia 到该轨；
   // 多文件依次排开——第二个起的 start 接续上一片段末尾（用 addClipFromMedia 返回的片段实际落点 + 时长推算）。
   function importToTrack(files, trackId, startSec) {
-    var added = 0, nextStart = Math.max(0, num(startSec, 0));
-    return files.reduce(function (chain, f, i) {
-      return chain.then(function () {
-        setDropOverlayText('上传中 ' + (i + 1) + '/' + files.length + ' …', '');
-        return importViaUpload(f).then(function (mediaId) {
-          if (!mediaId) return;
-          var clipId = App.addClipFromMedia(mediaId, trackId, nextStart);
-          if (clipId) {
-            added++;
-            // 推进下一个 start：用刚加片段的实际落点 + 其时间轴长度（含变速），紧贴排列。
-            var loc = locateClip(clipId);
-            if (loc) nextStart = loc.clip.start + clipDur(loc.clip, loc.track);
-          }
-          // addClipFromMedia 失败（轨满/锁定等）时素材仍已入库，符合“既导入素材库”的语义。
-        }).catch(function (e) { toast('上传失败（' + f.name + '）：' + e.message, 'error'); });
+    var nextStart = Math.max(0, num(startSec, 0));
+    return resolveMediaIds(files).then(function (idArr) {
+      var added = 0;
+      (idArr || []).forEach(function (mediaId) {
+        if (!mediaId) return;
+        var clipId = App.addClipFromMedia(mediaId, trackId, nextStart);
+        if (clipId) {
+          added++;
+          // 推进下一个 start：用刚加片段的实际落点 + 其时间轴长度（含变速），紧贴排列。
+          var loc = locateClip(clipId);
+          if (loc) nextStart = loc.clip.start + clipDur(loc.clip, loc.track);
+        }
+        // addClipFromMedia 失败（轨满/锁定等）时素材仍已入库，符合“既导入素材库”的语义。
       });
-    }, Promise.resolve()).then(function () {
       hideDropOverlay();
-      if (added) toast('已导入并添加 ' + added + ' 个片段到轨道', 'info', 1800);
+      if (added) toast('已导入并添加 ' + added + ' 个片段到轨道' + (CAPS.nativeImport ? '（引用原文件）' : ''), 'info', 1800);
       else toast('已导入到素材库', 'info', 1600);
     });
   }
@@ -1806,11 +1844,19 @@
    * 25. 顶部工具栏（contract_v2 §4.1）
    * ===================================================================== */
   function bindToolbar() {
-    // 导入：用浏览器自带的文件选择框（隐藏 <input type=file>），最可靠、永远在最前面，
-    // 不依赖系统 tkinter 对话框（后者在部分机器上会开在窗口后面、像“没反应”）。选中后走
-    // importFiles（= 上传进 media_store，与拖拽导入一致）。
+    // 导入：
+    //  · 桌面（pywebview）模式 → 原生文件对话框「引用原文件不复制」（importViaPicker → /api/pick）。
+    //  · 否则 → 浏览器自带文件框（隐藏 <input type=file>），复制进 media_store（最可靠、永远在最前面）。
     var fileInput = $('fileImport');
-    function openFilePicker() { if (fileInput) fileInput.click(); else importViaPicker(true); }
+    function openFilePicker() {
+      if (CAPS.nativeImport) {
+        importViaPicker(true).then(function (ids) {
+          if (ids && ids.length) toast('已导入 ' + ids.length + ' 个视频（引用原文件）', 'info', 1800);
+        }).catch(function (e) { toast('导入失败：' + e.message, 'error'); });
+        return;
+      }
+      if (fileInput) fileInput.click(); else importViaPicker(true);
+    }
     if (fileInput) fileInput.addEventListener('change', function () {
       var files = fileInput.files;
       if (files && files.length) importFiles(files).catch(function (e) { toast('导入失败：' + e.message, 'error'); });

@@ -106,6 +106,14 @@ _source_seq = 0          # stream id 递增计数
 _jobs = {}               # jobId -> job dict
 _job_seq = 0             # job id 递增计数
 
+# 桌面（pywebview）原生导入：窗口引用 + 最近一次 OS 拖入文件的真实路径缓存。
+# 浏览器从不给真实路径（只能复制上传）；pywebview 的 WebView2 能拿到拖入文件的磁盘
+# 路径，于是可以「引用不复制」。下面缓存供 /api/link 按文件名匹配认领。
+_pywebview_window = None          # pywebview 窗口对象（仅原生窗口模式下非空）
+_recent_drops = []               # [{name, path, ts}]，记录最近拖入的真实路径
+_recent_drops_lock = threading.Lock()
+_RECENT_DROP_TTL = 8.0           # 秒：超过即视为过期
+
 FFMPEG = ffmpeg_build.find_ffmpeg()
 FFPROBE = ffmpeg_build.find_ffprobe()
 
@@ -351,6 +359,99 @@ def run_picker(mode, suggest_name=None):
     except Exception as e:
         print("[picker] JSON 解析失败:", e, "raw:", out[:200])
         return {}
+
+
+# ---------------------------------------------------------------------------
+# 桌面（pywebview）原生导入：原生文件对话框 + 拖入路径认领
+# ---------------------------------------------------------------------------
+def native_import_available():
+    """当前是否能走「引用不复制」的原生导入（= 跑在 pywebview 原生窗口里）。"""
+    return _pywebview_window is not None
+
+
+def native_pick(multiple=True):
+    """用 pywebview 原生文件对话框选视频，返回真实绝对路径列表。
+    不可用 / 取消返回 None / []。比 tkinter 可靠（对话框挂在 app 窗口上，不会跑到后面）。"""
+    win = _pywebview_window
+    if win is None:
+        return None
+    try:
+        import webview
+        exts = ";".join("*" + e for e in sorted(ACCEPT_EXTS))
+        file_types = ("视频文件 (%s)" % exts, "所有文件 (*.*)")
+        res = win.create_file_dialog(
+            webview.OPEN_DIALOG, allow_multiple=bool(multiple), file_types=file_types)
+        if not res:
+            return []
+        return [os.path.abspath(p) for p in res]
+    except Exception as e:
+        print("[native_pick] 失败，回退 tkinter：", e)
+        return None
+
+
+def _remember_drops(pairs):
+    """记录最近拖入的 (name, path)；带时间戳，供 /api/link 认领。"""
+    now = time.time()
+    with _recent_drops_lock:
+        for name, path in pairs:
+            _recent_drops.append({"name": name, "path": path, "ts": now})
+        # 清过期
+        cutoff = now - _RECENT_DROP_TTL
+        _recent_drops[:] = [d for d in _recent_drops if d["ts"] >= cutoff]
+
+
+def _claim_drop_paths(names, timeout=1.5):
+    """按文件名从最近拖入缓存里认领真实路径（认领即移除，避免重复）。
+    names 顺序对应；返回与 names 等长的路径列表（认领不到的位置为 None）。
+    轮询等待 timeout 秒（原生回调与前端 fetch 有竞态，给点时间到达）。"""
+    deadline = time.time() + timeout
+    result = [None] * len(names)
+    pending = list(enumerate(names))
+    while pending:
+        with _recent_drops_lock:
+            still = []
+            for idx, nm in pending:
+                hit = None
+                for d in _recent_drops:
+                    if d["name"] == nm:
+                        hit = d
+                        break
+                if hit is not None:
+                    result[idx] = hit["path"]
+                    _recent_drops.remove(hit)
+                else:
+                    still.append((idx, nm))
+            pending = still
+        if not pending or time.time() >= deadline:
+            break
+        time.sleep(0.06)
+    return result
+
+
+def _on_native_drop(event):
+    """pywebview document drop 回调（跑在 pywebview 线程）：把拖入文件的真实路径缓存起来。
+    event.dataTransfer.files[i] 含 name 与 pywebviewFullPath（pywebview 按名匹配注入）。"""
+    try:
+        files = (event or {}).get("dataTransfer", {}).get("files", []) or []
+        pairs = []
+        for f in files:
+            full = f.get("pywebviewFullPath")
+            nm = f.get("name")
+            if full and nm:
+                pairs.append((nm, os.path.abspath(full)))
+        if pairs:
+            _remember_drops(pairs)
+    except Exception as e:
+        print("[native_drop] 解析失败：", e)
+
+
+def register_native_drop(window):
+    """页面加载完成后，在 document 上挂一个 drop 监听，激活 pywebview 的真实路径捕获。"""
+    try:
+        window.dom.document.events.drop += _on_native_drop
+        print("[native_drop] 已启用拖入文件路径捕获（引用导入）。")
+    except Exception as e:
+        print("[native_drop] 启用失败（拖拽将回退为复制）：", e)
 
 
 # ---------------------------------------------------------------------------
@@ -1229,6 +1330,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_projects_load(qs)
             elif path == "/api/fonts":
                 self._send_json({"fonts": list_fonts()})
+            elif path == "/api/caps":
+                self._handle_caps()
             elif path == "/api/ai/config":
                 self._handle_ai_config_get()
             elif path == "/favicon.ico":
@@ -1247,6 +1350,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/pick":
                 self._handle_pick()
+            elif path == "/api/link":
+                self._handle_link()
             elif path == "/api/pick-save":
                 self._handle_pick_save()
             elif path == "/api/upload":
@@ -1351,28 +1456,67 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_pick(self):
         body = self._read_json_body()
         multiple = bool(body.get("multiple", True))
-        mode = "open-multiple" if multiple else "open"
-        picked = run_picker(mode)
-        paths = picked.get("paths") or []
+        # 优先 pywebview 原生对话框（可靠、零拷贝引用原路径）；不可用再退回 tkinter picker。
+        paths = native_pick(multiple)
+        if paths is None:
+            mode = "open-multiple" if multiple else "open"
+            picked = run_picker(mode)
+            paths = picked.get("paths") or []
 
-        media_list = []
-        skipped = []
-        for p in paths:
-            if not os.path.isfile(p):
-                skipped.append(p)
+        media_list, skipped = self._register_paths(paths, imported="pick")
+        resp = {"media": media_list, "linked": True}   # linked=引用原路径，未复制
+        if skipped:
+            resp["error"] = "以下文件无法解析，已跳过：" + "; ".join(os.path.basename(s) for s in skipped)
+        self._send_json(resp)
+
+    def _register_paths(self, paths, imported="pick"):
+        """对一组绝对路径探测+登记（零拷贝引用），返回 (media_list, skipped)。"""
+        media_list, skipped = [], []
+        for p in (paths or []):
+            if not p or not os.path.isfile(p):
+                if p:
+                    skipped.append(p)
                 continue
             info = probe_source(p)
             if info is None:
                 skipped.append(p)
                 continue
-            media = register_media(info, imported="pick")
-            generate_thumb(media)  # 预生成缩略图
+            media = register_media(info, imported=imported)
+            generate_thumb(media)
             media_list.append(media)
+        return media_list, skipped
 
-        resp = {"media": media_list}
-        if skipped:
-            resp["error"] = "以下文件无法解析，已跳过：" + "; ".join(os.path.basename(s) for s in skipped)
-        self._send_json(resp)
+    # ---- /api/link（认领刚拖入文件的真实路径，零拷贝引用入库）----
+    def _handle_link(self):
+        body = self._read_json_body()
+        names = list(body.get("names") or [])
+        paths_in = list(body.get("paths") or [])    # 可直接给路径（备用/测试）
+        if names and not paths_in:
+            claimed = _claim_drop_paths(names)      # 与 names 等长，认领不到为 None
+        else:
+            claimed = paths_in
+            if not names:
+                names = [os.path.basename(p) if p else "?" for p in claimed]
+        # media 与 names 对齐（认领不到/解析失败处为 None），前端据此把对应文件回退为复制上传
+        media_aligned, unmatched, skipped = [], [], []
+        for i, p in enumerate(claimed):
+            nm = names[i] if i < len(names) else (os.path.basename(p) if p else "?")
+            if not p:
+                media_aligned.append(None); unmatched.append(nm); continue
+            if not os.path.isfile(p):
+                media_aligned.append(None); skipped.append(nm); continue
+            info = probe_source(p)
+            if info is None:
+                media_aligned.append(None); skipped.append(nm); continue
+            media = register_media(info, imported="link")
+            generate_thumb(media)
+            media_aligned.append(media)
+        self._send_json({"media": media_aligned, "linked": True,
+                         "unmatched": unmatched, "skipped": skipped})
+
+    # ---- /api/caps（前端探测：是否支持引用导入）----
+    def _handle_caps(self):
+        self._send_json({"nativeImport": native_import_available()})
 
     # ---- /api/pick-save（另存为）----
     def _handle_pick_save(self):
@@ -1727,20 +1871,25 @@ def run_native_window(url):
     """首选桌面外壳：pywebview 原生窗口（Windows 走 WebView2）。
     成功打开并阻塞至窗口关闭后返回 True；未安装/初始化失败返回 False（交上层回退）。
     注意：pywebview 的 GUI 事件循环必须跑在主线程。"""
+    global _pywebview_window
     try:
         import webview  # 仅在已安装时启用；未装则回退浏览器，不强制依赖
     except Exception:
         return False
     try:
-        webview.create_window(
+        win = webview.create_window(
             "轻剪 EasyCut", url,
             width=1440, height=900, min_size=(1024, 640),
         )
+        _pywebview_window = win                     # 启用「引用导入」（原生对话框 + 拖入路径捕获）
+        win.events.loaded += lambda: register_native_drop(win)
         webview.start()  # 阻塞主线程，直到窗口关闭
         return True
     except Exception as e:
         print("[提示] 原生窗口(pywebview)启动失败，回退浏览器：%s" % e)
         return False
+    finally:
+        _pywebview_window = None
 
 
 def main():
