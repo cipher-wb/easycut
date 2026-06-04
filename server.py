@@ -1352,6 +1352,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_pick()
             elif path == "/api/link":
                 self._handle_link()
+            elif path == "/api/reveal":
+                self._handle_reveal()
             elif path == "/api/pick-save":
                 self._handle_pick_save()
             elif path == "/api/upload":
@@ -1517,6 +1519,32 @@ class Handler(BaseHTTPRequestHandler):
     # ---- /api/caps（前端探测：是否支持引用导入）----
     def _handle_caps(self):
         self._send_json({"nativeImport": native_import_available()})
+
+    # ---- /api/reveal（在资源管理器里打开并选中文件；本机服务，各模式都可用）----
+    def _handle_reveal(self):
+        body = self._read_json_body()
+        path = (body.get("path") or "").strip()
+        if not path:
+            self._send_json({"ok": False, "error": "缺少路径"}); return
+        norm = os.path.normpath(path)
+        try:
+            if os.name == "nt":
+                if os.path.isfile(norm):
+                    # explorer /select 高亮该文件；注意 explorer 即便成功也常返回非 0，故用 Popen 不校验
+                    subprocess.Popen('explorer /select,"%s"' % norm)
+                else:
+                    d = norm if os.path.isdir(norm) else os.path.dirname(norm)
+                    if not os.path.isdir(d):
+                        self._send_json({"ok": False, "error": "文件或目录不存在"}); return
+                    subprocess.Popen(['explorer', d])
+                self._send_json({"ok": True}); return
+            # 其它平台兜底（本项目仅 Windows，理论不会走到）
+            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            target = norm if os.path.exists(norm) else os.path.dirname(norm)
+            subprocess.Popen([opener, target])
+            self._send_json({"ok": True})
+        except Exception as e:
+            self._send_json({"ok": False, "error": str(e)})
 
     # ---- /api/pick-save（另存为）----
     def _handle_pick_save(self):

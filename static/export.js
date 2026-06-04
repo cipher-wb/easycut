@@ -287,12 +287,23 @@
   }
 
   /* ----------------------------------------------------------------------
-   * “打开所在文件夹”：后端无打开接口 → 复制路径到剪贴板（沿用 v1 降级）
+   * “打开所在文件夹”：调后端在资源管理器里打开并选中文件（本机服务，各模式可用）；
+   * 失败再降级为复制路径到剪贴板。
    * -------------------------------------------------------------------- */
   function onOpenFolder() {
     if (!curOutputPath) return;
-    copyText(curOutputPath);
-    App.toast('已复制输出路径到剪贴板：' + curOutputPath, 'ok', 3500);
+    var p = curOutputPath;
+    if (App.api && App.api.reveal) {
+      App.api.reveal(p).then(function (r) {
+        if (r && r.ok) return;
+        copyText(p); App.toast('无法打开文件夹（' + ((r && r.error) || '未知') + '），已复制路径：' + p, 'ok', 3500);
+      }).catch(function () {
+        copyText(p); App.toast('已复制输出路径到剪贴板：' + p, 'ok', 3500);
+      });
+      return;
+    }
+    copyText(p);
+    App.toast('已复制输出路径到剪贴板：' + p, 'ok', 3500);
   }
 
   /* ----------------------------------------------------------------------

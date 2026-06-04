@@ -40,7 +40,7 @@
 ## 关键文件
 | 文件 | 职责 |
 |------|------|
-| `server.py` | HTTP API：静态资源 / Range 视频流 `/api/stream` / 文件对话框 `/api/pick`(桌面下走 pywebview 原生对话框、零拷贝引用原路径，否则回退 tkinter),`/api/pick-save` / **引用导入 `/api/link`**(按文件名认领 pywebview 拖入的真实路径，零拷贝引用入库) / 能力探测 `/api/caps`(nativeImport=是否支持引用导入) / 拖拽上传 `/api/upload`(复制存 media_store，浏览器回退用) / 缩略图 `/api/thumb` / 字体 `/api/fonts` / 导出 `/api/export`,`/api/export/status` / 工程 `/api/projects`,`/api/projects/save|load|delete|rename` / 重新链接 `/api/relink` / **AI 代理 `/api/ai`**(stdlib urllib 转发用户自配大模型，Key 留后端、无 CORS) + 配置 `/api/ai/config`(GET 脱敏读 / POST 写 `ai_config.json`) |
+| `server.py` | HTTP API：静态资源 / Range 视频流 `/api/stream` / 文件对话框 `/api/pick`(桌面下走 pywebview 原生对话框、零拷贝引用原路径，否则回退 tkinter),`/api/pick-save` / **引用导入 `/api/link`**(按文件名认领 pywebview 拖入的真实路径，零拷贝引用入库) / 能力探测 `/api/caps`(nativeImport=是否支持引用导入) / 打开所在文件夹 `/api/reveal`(explorer /select 选中文件，本机服务各模式可用) / 拖拽上传 `/api/upload`(复制存 media_store，浏览器回退用) / 缩略图 `/api/thumb` / 字体 `/api/fonts` / 导出 `/api/export`,`/api/export/status` / 工程 `/api/projects`,`/api/projects/save|load|delete|rename` / 重新链接 `/api/relink` / **AI 代理 `/api/ai`**(stdlib urllib 转发用户自配大模型，Key 留后端、无 CORS) + 配置 `/api/ai/config`(GET 脱敏读 / POST 写 `ai_config.json`) |
 | `ffmpeg_build.py` | 由 project 模型生成多轨合成滤镜图与参数（overlay 画中画 + drawtext 中文 + amix 混音 + setpts/atempo 变速），走 `-filter_complex_script` |
 | `picker.py` | 系统「打开/另存为」对话框（tkinter 独立子进程，JSON 输出） |
 | `static/app.js` | 唯一状态源 `project` + 撤销重做 + 事件总线 `bus` + `api.*` + 素材库 + 属性面板 + 导入 + 工程序列化/加载/脏标记/relink + **评论批注 mutator**（addComment/updateComment/removeComment/setCommentStatus，进 snapshot/序列化） |

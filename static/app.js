@@ -136,6 +136,7 @@
     link: function (names) { return postJson('/api/link', { names: names }); },
     caps: function () { return jsonFetch('/api/caps'); },
     pickSave: function (suggestName) { return postJson('/api/pick-save', { suggestName: suggestName }); },
+    reveal: function (path) { return postJson('/api/reveal', { path: path }); },
     upload: function (file) {
       var fd = new FormData();
       fd.append('file', file, file.name);
