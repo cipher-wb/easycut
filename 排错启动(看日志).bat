@@ -10,13 +10,13 @@ chcp 65001 >nul
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
-title QingJian EasyCut - Server
+title ASTRA Lyra - Server
 
 echo ============================================================
-echo   QingJian EasyCut  -  local multi-track video editor
+echo   ASTRA Lyra  -  local multi-track video editor
 echo ============================================================
 echo.
-echo   Starting EasyCut... a desktop app window will open.
+echo   Starting Lyra... a desktop app window will open.
 echo   Close THAT window to quit; this console stops with it.
 echo.
 echo   This is the LOG / TROUBLESHOOT launcher (shows errors).

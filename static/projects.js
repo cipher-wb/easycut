@@ -1,5 +1,5 @@
 /* =========================================================================
- * projects.js — 工程（项目）系统 UI（轻剪 EasyCut v3）
+ * projects.js — 工程（项目）系统 UI（Lyra · ASTRA）
  *
  * 权威依据：_build/project_design.md §3（App API）/ §5.3（本文件职责）/
  *           §5.4（DOM id）/ §6（dirty / beforeunload / 启动流程）。

@@ -1906,7 +1906,7 @@ def run_native_window(url):
         return False
     try:
         win = webview.create_window(
-            "轻剪 EasyCut", url,
+            "Lyra · ASTRA", url,
             width=1440, height=900, min_size=(1024, 640),
         )
         _pywebview_window = win                     # 启用「引用导入」（原生对话框 + 拖入路径捕获）
@@ -1936,7 +1936,7 @@ def main():
     httpd.daemon_threads = True
 
     print("=" * 60)
-    print("  轻剪 EasyCut v2  /  Multi-track NLE  —  本地服务已启动")
+    print("  ASTRA Lyra  /  Multi-track NLE  —  本地服务已启动")
     print("=" * 60)
     print("  访问地址 / URL : %s" % url)
     print("  ffmpeg          : %s" % FFMPEG)

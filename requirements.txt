@@ -1,4 +1,4 @@
-# 轻剪 EasyCut —— 桌面外壳依赖（仅用于「原生窗口」体验与打包；核心后端仍纯标准库）
+# Lyra · ASTRA —— 桌面外壳依赖（仅用于「原生窗口」体验与打包；核心后端仍纯标准库）
 #
 # 安装：  python -m pip install -r requirements.txt
 # 说明：

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# 轻剪 EasyCut — 桌面版启动器
+# Lyra · ASTRA — 桌面版启动器
 # .pyw 文件由 Windows 的 pythonw 运行：双击即用、无黑色控制台窗口，
 # 也不依赖已被微软弃用的 VBScript。
 #

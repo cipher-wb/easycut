@@ -1,5 +1,5 @@
 /* ===================================================================
-   轻剪 — Claude 风格皮肤（浅色为主 · 暖色调 · 预览区保持暖深色）
+   Lyra (ASTRA) — Claude 风格皮肤（浅色为主 · 暖色调 · 预览区保持暖深色）
    可直接替换 static/style.css —— 选择器与原文件一一对应
    布局：左=素材库  中上=预览  右=属性  下=多轨时间轴
    =================================================================== */
@@ -185,7 +185,12 @@ select { cursor: pointer; }
 .tb-brand {
   font-family: "Noto Serif SC", "Songti SC", serif;
   font-size: 19px; font-weight: 700; color: var(--text); letter-spacing: 1px;
-  white-space: nowrap;
+  white-space: nowrap; display: inline-flex; align-items: baseline; gap: 6px;
+}
+.tb-brand .tb-brand-sub {
+  font-family: inherit; font-size: 9px; font-weight: 700; letter-spacing: 2px;
+  color: var(--accent); border: 1px solid var(--accent-soft); border-radius: 4px;
+  padding: 1px 4px; transform: translateY(-1px);
 }
 #toolbar .tb-group:first-child { flex: 0 0 auto; }
 .tb-play { gap: 12px; }
