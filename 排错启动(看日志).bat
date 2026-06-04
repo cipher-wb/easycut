@@ -16,11 +16,13 @@ echo ============================================================
 echo   QingJian EasyCut  -  local multi-track video editor
 echo ============================================================
 echo.
-echo   Starting... a desktop app window (Edge/Chrome app mode)
-echo   will open. Close THAT window to quit; this console will
-echo   then stop and close as well.
-echo   This window shows logs/errors. For a clean no-console
-echo   launch, double-click "轻剪 桌面版.vbs" instead.
+echo   Starting EasyCut... a desktop app window will open.
+echo   Close THAT window to quit; this console stops with it.
+echo.
+echo   This is the LOG / TROUBLESHOOT launcher (shows errors).
+echo   For normal daily use, double-click the .pyw launcher
+echo   (no black console). Use this .bat only when something
+echo   goes wrong and you need to read the messages below.
 echo ------------------------------------------------------------
 echo.
 

@@ -17,7 +17,7 @@
 - 后端：`server.py`，**核心逻辑坚持 Python 标准库** HTTP 服务，`subprocess` 调用本机 `ffmpeg`/`ffprobe`。**禁止 Flask 等 Web 框架**；**剪辑/导出/工程等核心逻辑禁止引入 pip 依赖**。
 - 前端：`static/`，**纯原生 HTML/CSS/JS**，无框架、无 CDN、必须可离线。
 - **唯一允许的 pip 依赖范围 = 桌面外壳/打包**（`pywebview`、将来 `pyinstaller`），见 `requirements.txt`；且必须可选——没装也能靠浏览器回退跑起来。除此之外一律标准库。
-- 所有文本文件 UTF-8（无 BOM）；`启动.bat` 必须保持**纯 ASCII**（中文会在某些 cmd 代码页下乱码导致启动失败）。
+- 所有文本文件 UTF-8（无 BOM）；`排错启动(看日志).bat` 的**内容**必须保持**纯 ASCII**（中文 echo 会在某些 cmd 代码页下乱码导致启动失败；文件名可中文）。
 
 ## 形态：桌面版（pywebview 原生窗口，三级回退）
 **轻剪是「桌面应用」**：`main()` 默认桌面模式 = 后台线程跑 `serve_forever`，主线程承载一个桌面外壳窗口，**关窗即 `httpd.shutdown()` 退出**。外壳按可用性三级回退：
@@ -25,12 +25,12 @@
 2. **回退① `launch_app_window(url)`** —— 未装 pywebview 时，用本机 **Edge/Chrome `--app` 模式**（`find_app_browser()`：winreg App Paths→常见路径→PATH，优先 Edge）开无地址栏窗口，独立 `APP_PROFILE_DIR` 保证随窗口关闭而退。
 3. **回退② `webbrowser.open`** —— 连浏览器都没有时，开普通标签（保留控制台）。
 - `--no-app`/`--server-only`/`--browser` 任一参数 → 强制浏览器标签模式（开发用）。
-- 用户入口：`轻剪.pyw`（`.pyw` 由 pythonw 运行，**无黑窗**，已替代旧的 VBS——VBScript 被微软弃用）；`启动.bat`（保留命令行日志窗，排错用，纯 ASCII）。
+- 用户入口：`轻剪.pyw`（`.pyw` 由 pythonw 运行，**无黑窗**，日常首选；已替代旧的 VBS——VBScript 被微软弃用）；`排错启动(看日志).bat`（py 运行、保留命令行日志窗，仅排错用，内容纯 ASCII）。
 - 打包路线（稳定后）：PyInstaller 把 `server.py`+`static/` 打成单 exe（pywebview 一起进去），同事零 Python 依赖；ffmpeg 是否一并打包另议。**不要用 Tauri**（要 Rust/Node/VS Build Tools 工具链 + 重写后端，对保留 Python 的场景过重，已评估否决）。
 
 ## 怎么运行 / 怎么测
 - 装外壳依赖（一次）：`python -m pip install -r requirements.txt`（装 pywebview；不装则自动回退 Edge --app）。
-- 运行：双击 `轻剪.pyw`（无控制台原生窗口）或 `启动.bat`（带日志），或 `py -3 server.py`（默认开桌面窗口；`--no-app` 走浏览器标签，监听 `127.0.0.1:8765`，端口占用自动 +1）。
+- 运行：双击 `轻剪.pyw`（无控制台原生窗口）或 `排错启动(看日志).bat`（带日志），或 `py -3 server.py`（默认开桌面窗口；`--no-app` 走浏览器标签，监听 `127.0.0.1:8765`，端口占用自动 +1）。
 - 测原生窗口：起服后会拉起 WebView2（进程名 `msedgewebview2.exe`，**注意按命令行 user-data-dir 过滤——本机 clash-verge 也在用 WebView2，别误杀**；它还会拦本地 curl/Invoke-WebRequest，校验 HTTP 用 `curl --noproxy '*'` 或 `Get-NetTCPConnection`）。pywebview 的 `webview.start()` 在窗口关闭后返回 → 触发 `httpd.shutdown()`。
 - 测 Edge 回退：`find_app_browser()` 应返回 msedge 路径；关掉**带 `jianjianji_work\appwindow` 的 msedge 进程**后服务应自动停。**别误杀用户日常 msedge**。
 - 测完务必停掉本次起的 `python/pythonw server.py` 进程（force-kill 时其 WebView2 子进程会随父退出）。
