@@ -18,8 +18,14 @@
 - 前端：`static/`，**纯原生 HTML/CSS/JS**，无框架、无 CDN、必须可离线。
 - 所有文本文件 UTF-8（无 BOM）；`启动.bat` 必须保持**纯 ASCII**（中文会在某些 cmd 代码页下乱码导致启动失败）。
 
+## 形态：桌面版（浏览器应用窗口外壳）
+**轻剪是「桌面应用」**，但外壳不引任何依赖：用本机 **Edge/Chrome 的 `--app` 模式**把网页渲染成一个**无地址栏/无标签页的独立窗口**（看着像原生软件）。第一版**不打包安装包**，打开即用；稳定后再考虑 pywebview/Tauri 真打包。
+- 实现在 `server.py`：`find_app_browser()`（winreg App Paths → 常见安装路径 → PATH，优先 Edge 再 Chrome）+ `launch_app_window(url)`（`--app=URL --user-data-dir=APP_PROFILE_DIR`，独立 profile 保证进程随窗口关闭而退；带 `--no-first-run` 等）。`main()` 默认走桌面模式：后台线程跑 `serve_forever`，主线程 `proc.wait()` 盯应用窗口，**关窗即 `httpd.shutdown()` 退出**。找不到浏览器→回退 `webbrowser.open` 老模式。`--no-app`/`--server-only` 强制老的浏览器标签模式（开发用）。
+- 用户入口：`轻剪 桌面版.vbs`（静默，pyw/pythonw 跑，**无黑窗**）；`启动.bat`（保留命令行日志窗，排错用）。两者都 ASCII-only。
+
 ## 怎么运行 / 怎么测
-- 运行：双击 `启动.bat`，或 `py -3 server.py`（监听 `127.0.0.1:8765`，端口占用自动 +1，启动自动开浏览器）。
+- 运行：双击 `轻剪 桌面版.vbs`（无控制台桌面窗口）或 `启动.bat`（带日志），或 `py -3 server.py`（默认开应用窗口；`--no-app` 走浏览器标签，监听 `127.0.0.1:8765`，端口占用自动 +1）。
+- 测桌面模式：`find_app_browser()` 应返回 msedge 路径；起服后应用窗口会拉全部静态资源（日志里一串 `GET /static/*.js 200`）；关掉**带 `jianjianji_work\appwindow` 的 msedge 进程**后服务应自动停（端口变 DOWN、python 退出）。**别误杀用户日常 msedge**——按命令行里的 profile 目录过滤。
 - ffmpeg/ffprobe 已确认装在本机（WinGet 目录或 PATH），`ffmpeg_build.find_ffmpeg/find_ffprobe` 会自动定位。
 - **验证方式**：本机有全局 `playwright`（`npm root -g`）+ msedge。可用 headless 脚本打开 `http://127.0.0.1:8765/` 做 DOM/交互断言与截图；后端导出可直接 `import ffmpeg_build` 用 lavfi 造源真跑 ffmpeg + ffprobe 校验。改完 JS 跑 `node --check`，改完 Python 跑 `ast.parse` 自检。测完记得停掉占用 8765 的进程。
 

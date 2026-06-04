@@ -60,6 +60,8 @@ STREAM_CHUNK = 64 * 1024  # 64KB/块
 WORK_ROOT = os.path.join(tempfile.gettempdir(), "jianjianji_work")
 UPLOAD_DIR = os.path.join(WORK_ROOT, "uploads")  # 历史目录（保留，不再写入）
 THUMB_DIR = os.path.join(WORK_ROOT, "thumbs")
+# 桌面模式：浏览器「应用窗口」的独立用户数据目录（与用户日常浏览器隔离，互不影响）
+APP_PROFILE_DIR = os.path.join(WORK_ROOT, "appwindow")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 
@@ -1646,6 +1648,81 @@ def find_free_port(host, start_port, max_tries=50):
     raise OSError("找不到可用端口（从 %d 起试了 %d 个）" % (start_port, max_tries))
 
 
+# =====================================================================
+# 桌面模式：用本机 Edge/Chrome 的「应用窗口(--app)」模式把网页变成
+# 一个无地址栏/无标签页的独立窗口（看起来像桌面软件，零额外依赖）。
+# 关掉该窗口即退出程序。找不到浏览器时回退为普通浏览器标签。
+# =====================================================================
+def find_app_browser():
+    """定位可用于 --app 模式的浏览器，优先 Edge，其次 Chrome。
+    返回 (exe路径, 名称) 或 (None, None)。"""
+    candidates = []
+    # 1) 注册表 App Paths（最可靠）
+    try:
+        import winreg
+        for exe in ("msedge.exe", "chrome.exe"):
+            for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                try:
+                    key = winreg.OpenKey(
+                        root,
+                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\\" + exe)
+                    val, _ = winreg.QueryValueEx(key, None)
+                    winreg.CloseKey(key)
+                    if val:
+                        candidates.append((val, "Edge" if "edge" in exe else "Chrome"))
+                except OSError:
+                    pass
+    except Exception:
+        pass
+    # 2) 常见安装路径
+    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+    pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    local = os.environ.get("LOCALAPPDATA", "")
+    fixed = [
+        (os.path.join(pfx86, r"Microsoft\Edge\Application\msedge.exe"), "Edge"),
+        (os.path.join(pf, r"Microsoft\Edge\Application\msedge.exe"), "Edge"),
+        (os.path.join(pf, r"Google\Chrome\Application\chrome.exe"), "Chrome"),
+        (os.path.join(pfx86, r"Google\Chrome\Application\chrome.exe"), "Chrome"),
+    ]
+    if local:
+        fixed.append((os.path.join(local, r"Google\Chrome\Application\chrome.exe"), "Chrome"))
+    candidates += fixed
+    # 3) PATH
+    for exe, name in (("msedge", "Edge"), ("chrome", "Chrome")):
+        p = shutil.which(exe)
+        if p:
+            candidates.append((p, name))
+
+    seen = set()
+    for path, name in candidates:
+        if path and path.lower() not in seen and os.path.isfile(path):
+            return path, name
+        seen.add((path or "").lower())
+    return None, None
+
+
+def launch_app_window(url):
+    """以应用窗口模式打开 url。成功返回 subprocess 对象，失败返回 None。"""
+    exe, name = find_app_browser()
+    if not exe:
+        return None, None
+    os.makedirs(APP_PROFILE_DIR, exist_ok=True)
+    args = [
+        exe,
+        "--app=%s" % url,
+        "--user-data-dir=%s" % APP_PROFILE_DIR,  # 独立 profile：保证本进程随窗口关闭而退出
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--window-size=1440,900",
+    ]
+    try:
+        proc = subprocess.Popen(args)
+        return proc, name
+    except Exception as e:
+        print("[提示] 启动应用窗口失败：%s" % e)
+        return None, None
+
+
 def main():
     if not os.path.isfile(os.path.join(STATIC_DIR, "index.html")):
         print("[启动错误] 未找到 static/index.html，前端文件可能缺失。")
@@ -1674,9 +1751,56 @@ def main():
     print("  工作目录        : %s" % WORK_ROOT)
     print("  工程库          : %s" % PROJECTS_DIR)
     print("  持久素材库      : %s" % MEDIA_STORE_DIR)
+    # 桌面模式：默认以「应用窗口」打开；--no-app/--server-only 强制老的浏览器标签模式
+    want_app = not any(a in ("--no-app", "--server-only", "--browser") for a in sys.argv[1:])
+
+    if want_app:
+        # 后台线程跑服务，主线程盯着应用窗口；窗口一关就停服退出
+        srv_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        srv_thread.start()
+        time.sleep(0.4)  # 等服务起来再连
+        proc, name = launch_app_window(url)
+        if proc is not None:
+            print("-" * 60)
+            print("  已以桌面应用窗口打开（%s 应用模式）。" % name)
+            print("  关闭该窗口即可退出程序，无需手动停服。")
+            print("-" * 60)
+            try:
+                proc.wait()  # 阻塞直到应用窗口被关闭
+            except KeyboardInterrupt:
+                print("\n[停止] 收到 Ctrl+C...")
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                print("[停止] 应用窗口已关闭，服务已停止。")
+            return
+        # 没找到浏览器 → 回退普通模式
+        print("-" * 60)
+        print("  未找到 Edge/Chrome，回退为浏览器标签模式。")
+        print("  请保持本窗口开启；按 Ctrl+C 可停止服务。")
+        print("-" * 60)
+        try:
+            webbrowser.open(url)
+        except Exception as e:
+            print("[提示] 自动打开浏览器失败，请手动访问：%s（%s）" % (url, e))
+        try:
+            while srv_thread.is_alive():
+                srv_thread.join(0.5)
+        except KeyboardInterrupt:
+            print("\n[停止] 收到 Ctrl+C，正在关闭服务...")
+        finally:
+            httpd.shutdown()
+            httpd.server_close()
+            print("[停止] 服务已关闭。")
+        return
+
+    # 老模式（开发用）：浏览器标签 + 保留控制台
     print("-" * 60)
-    print("  浏览器将自动打开编辑界面；请保持本窗口开启。")
-    print("  按 Ctrl+C 可停止服务。")
+    print("  浏览器标签模式（开发）。请保持本窗口开启；按 Ctrl+C 停止。")
     print("-" * 60)
 
     def _open():

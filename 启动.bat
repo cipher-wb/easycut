@@ -16,9 +16,11 @@ echo ============================================================
 echo   QingJian EasyCut  -  local multi-track video editor
 echo ============================================================
 echo.
-echo   Starting local server... a browser tab will open.
-echo   KEEP THIS WINDOW OPEN while you work.
-echo   Close this window to stop the service.
+echo   Starting... a desktop app window (Edge/Chrome app mode)
+echo   will open. Close THAT window to quit; this console will
+echo   then stop and close as well.
+echo   This window shows logs/errors. For a clean no-console
+echo   launch, double-click "轻剪 桌面版.vbs" instead.
 echo ------------------------------------------------------------
 echo.
 
