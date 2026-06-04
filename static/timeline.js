@@ -1026,8 +1026,14 @@
     else bus.emit('seek', t);
   }
   function bindRuler() {
-    if (!elRuler) return;
-    elRuler.addEventListener('pointerdown', function (e) { e.preventDefault(); startScrub(e); });
+    if (elRuler) elRuler.addEventListener('pointerdown', function (e) { e.preventDefault(); startScrub(e); });
+    // 「整轨批注」带：空白处点击 = 跟刻度尺一样定位播放头；
+    // 但点在已有批注标签/手柄上时不抢——留给原有的“打开/编辑批注”交互。
+    if (elGlobalCmt) elGlobalCmt.addEventListener('pointerdown', function (e) {
+      if (e.button != null && e.button !== 0) return;                              // 右键留给“加整轨评论”菜单
+      if (e.target.closest('.cmt-tag') || e.target.closest('.cmt-handle')) return; // 点批注本身 → 打开批注，不定位
+      e.preventDefault(); startScrub(e);
+    });
   }
 
   /* =======================================================================
