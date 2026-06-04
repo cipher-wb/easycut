@@ -58,7 +58,7 @@
   /* 时间轴尺寸常量 */
   --track-h: 56px;
   --head-w: 168px;
-  --ruler-h: 24px;
+  --ruler-h: 30px;
 
   --r-sm: 7px;
   --r-md: 10px;
@@ -506,6 +506,7 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
   background: var(--panel-2);
   border-bottom: 1px solid var(--line);
   font-size: 10px; color: var(--text-dim);
+  cursor: pointer;   /* 提示：点刻度尺=定位到某一帧 */
 }
 #timelineRuler .tl-tick {
   position: absolute; top: 0; height: 100%;
@@ -637,6 +638,27 @@ body.shift-edge .clip .clip-trim:hover {
   content: ""; position: absolute; top: 0; left: -5px;
   border-left: 6px solid transparent; border-right: 6px solid transparent;
   border-top: 8px solid var(--playhead);
+}
+
+/* 刻度尺上的播放头标记：手柄(rph-knob) + 向下延伸的竖线，
+   竖线高度跨「刻度尺 + 整轨批注带(26px)」，与轨道区 #playhead 连成一条。
+   挂在 sticky 的 #timelineRuler 里 → 纵向滚动也始终对齐刻度。*/
+.ruler-playhead {
+  position: absolute; top: 0; left: 0; width: 2px; margin-left: -1px;
+  height: calc(var(--ruler-h) + 26px);
+  background: var(--playhead); z-index: 26; pointer-events: none;
+}
+.ruler-playhead .rph-knob {
+  position: absolute; top: 2px; left: 50%; transform: translateX(-50%);
+  width: 14px; height: 16px; border-radius: 4px 4px 7px 7px;
+  background: var(--playhead); border: 1px solid rgba(0,0,0,.18);
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  pointer-events: auto; cursor: ew-resize;
+}
+.ruler-playhead .rph-knob::after {   /* 手柄上的两条抓握纹，提示可拖 */
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 6px; height: 7px; transform: translate(-50%,-50%);
+  border-left: 1px solid rgba(255,255,255,.7); border-right: 1px solid rgba(255,255,255,.7);
 }
 /* 磁吸对齐参考竖线 */
 #snapGuide {

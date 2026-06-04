@@ -41,6 +41,7 @@
 
   /* ---------- DOM 句柄（解析时容错 contract 权威 id 与 timeline_v2 草案 id） ---------- */
   var elPanel, elScroll, elRuler, elHeads, elArea, elLanes, elPlayhead, elSnap, elTotalDur, elDrop, elGlobalCmt;
+  var elRulerPlayhead;   // 刻度尺上的播放头标记（手柄+延伸线），与 #playhead 联动
   var elBtnZoomIn, elBtnZoomOut, elRngZoom, elBtnAddTrack, elAddTrackMenu;
   var ready = false;
 
@@ -387,6 +388,27 @@
       frag.appendChild(tick);
     }
     elRuler.appendChild(frag);
+    // replaceChildren 会清掉播放头标记，重建后补回并对齐
+    ensureRulerPlayhead();
+    if (elRulerPlayhead) elRulerPlayhead.style.left = timeToX(playhead()) + 'px';
+  }
+
+  /* 刻度尺上的播放头标记：一个好抓的手柄 + 向下延伸的竖线（跨刻度尺与批注带，
+   * 与轨道区 #playhead 连成一条线）。让"点刻度尺定位某一帧"既可见又好点。 */
+  function ensureRulerPlayhead() {
+    if (!elRuler) return;
+    if (!elRulerPlayhead) {
+      elRulerPlayhead = el('div', 'ruler-playhead');
+      var knob = el('div', 'rph-knob');
+      knob.title = '拖动定位到某一帧（也可直接点刻度尺任意位置）';
+      knob.addEventListener('pointerdown', function (e) {
+        if (e.button != null && e.button !== 0) return;   // 仅左键
+        e.stopPropagation(); e.preventDefault();
+        startScrub(e);
+      });
+      elRulerPlayhead.appendChild(knob);
+    }
+    if (elRulerPlayhead.parentNode !== elRuler) elRuler.appendChild(elRulerPlayhead);
   }
 
   /* ---------- 播放头 ---------- */
@@ -394,6 +416,7 @@
     if (!elPlayhead) return;
     var x = timeToX(t);
     elPlayhead.style.left = x + 'px';
+    if (elRulerPlayhead) elRulerPlayhead.style.left = x + 'px';   // 刻度尺标记同步
     // 自动滚动跟随：横向滚动发生在 #timelineLanes（overflow-x:auto），而非 overflow-x:hidden 的 #timelineScroll
     var sc = elLanes || elScroll; if (!sc) return;
     var L = sc.scrollLeft, R = L + sc.clientWidth;
