@@ -176,13 +176,16 @@ select { cursor: pointer; }
    顶部工具栏 #toolbar
    =================================================================== */
 #toolbar {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 14px; background: var(--panel);
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px; background: var(--panel);
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
+  flex-wrap: wrap; row-gap: 7px;   /* 窗口变窄时自动换行，保证按钮全部可见、不出现横向滚动条 */
 }
+/* 窄窗下让按钮更紧凑（整体缩小而不是裁掉/滚动） */
+#toolbar button { padding: 6px 10px; font-size: 12.5px; }
 .tb-group { display: flex; align-items: center; gap: 6px; }
-.tb-spacer { flex: 1 1 auto; }
+.tb-spacer { flex: 1 1 0; min-width: 0; }   /* 有富余空间才撑开；空间不够则收为 0，配合换行 */
 .tb-sep { width: 1px; align-self: stretch; background: var(--line); margin: 3px 3px; }
 .tb-brand {
   font-family: "Noto Serif SC", "Songti SC", serif;
@@ -439,9 +442,9 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
    底部多轨时间轴 #timelinePanel
    =================================================================== */
 #timelinePanel {
-  flex: 0 0 252px; height: 252px;
+  flex: 0 1 252px; height: 252px; min-height: 120px;   /* 可被压缩：窗口很矮时自动缩，不溢出 */
   background: var(--panel); border-top: 1px solid var(--line);
-  display: flex; flex-direction: column; min-height: 0;
+  display: flex; flex-direction: column;
 }
 /* 时间轴工具条 */
 #timelineToolbar {

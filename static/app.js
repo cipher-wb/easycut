@@ -2455,7 +2455,7 @@
     if (rz && tp) {
       function setH(h) {
         h = Math.max(140, Math.min(Math.round(window.innerHeight * 0.85), h));
-        tp.style.flex = '0 0 ' + h + 'px'; tp.style.height = h + 'px';
+        tp.style.flex = '0 1 ' + h + 'px'; tp.style.height = h + 'px';   // 0 1：偏好 h，但窗口矮时可压缩
         try { localStorage.setItem('qj-h-timeline', String(Math.round(h))); } catch (e) {}
       }
       var savedH = parseInt(localStorage.getItem('qj-h-timeline') || '', 10); if (isFinite(savedH)) setH(savedH);
