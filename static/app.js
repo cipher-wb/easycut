@@ -2431,12 +2431,48 @@
   initDefaultTracks();
   rebuildTimeline();
 
+  /* 面板自由拖拽大小（layout）：素材库/属性面板宽度 + 时间轴高度，记忆到 localStorage */
+  function bindLayoutResizers() {
+    function widthResizer(rzId, panelSel, dir, key, minW, maxFn) {
+      var rz = document.getElementById(rzId), panel = document.querySelector(panelSel);
+      if (!rz || !panel) return;
+      function setW(w) {
+        w = Math.max(minW, Math.min(maxFn(), w));
+        panel.style.flex = '0 0 ' + w + 'px'; panel.style.width = w + 'px';
+        try { localStorage.setItem(key, String(Math.round(w))); } catch (e) {}
+      }
+      var saved = parseInt(localStorage.getItem(key) || '', 10); if (isFinite(saved)) setW(saved);
+      var on = false, sx = 0, sw = 0;
+      rz.addEventListener('mousedown', function (e) { on = true; sx = e.clientX; sw = panel.getBoundingClientRect().width; rz.classList.add('dragging'); document.body.style.cursor = 'col-resize'; e.preventDefault(); });
+      window.addEventListener('mousemove', function (e) { if (on) setW(sw + dir * (e.clientX - sx)); });
+      window.addEventListener('mouseup', function () { if (!on) return; on = false; rz.classList.remove('dragging'); document.body.style.cursor = ''; window.dispatchEvent(new Event('resize')); });
+    }
+    // 素材库在分隔条左侧（拖右变宽）；属性面板在右侧（拖左变宽）
+    widthResizer('mediaResizer', '#mediaPanel', +1, 'qj-w-media', 160, function () { return Math.round(window.innerWidth * 0.4); });
+    widthResizer('propResizer', '#propPanel', -1, 'qj-w-prop', 180, function () { return Math.round(window.innerWidth * 0.5); });
+    // 时间轴高度（往上拖变高 → 看到更多轨道）
+    var rz = document.getElementById('timelineResizer'), tp = document.getElementById('timelinePanel');
+    if (rz && tp) {
+      function setH(h) {
+        h = Math.max(140, Math.min(Math.round(window.innerHeight * 0.85), h));
+        tp.style.flex = '0 0 ' + h + 'px'; tp.style.height = h + 'px';
+        try { localStorage.setItem('qj-h-timeline', String(Math.round(h))); } catch (e) {}
+      }
+      var savedH = parseInt(localStorage.getItem('qj-h-timeline') || '', 10); if (isFinite(savedH)) setH(savedH);
+      var on = false, sy = 0, sh = 0;
+      rz.addEventListener('mousedown', function (e) { on = true; sy = e.clientY; sh = tp.getBoundingClientRect().height; rz.classList.add('dragging'); document.body.style.cursor = 'ns-resize'; e.preventDefault(); });
+      window.addEventListener('mousemove', function (e) { if (on) setH(sh + (sy - e.clientY)); });
+      window.addEventListener('mouseup', function () { if (!on) return; on = false; rz.classList.remove('dragging'); document.body.style.cursor = ''; window.dispatchEvent(new Event('resize')); });
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', function () {
     bindFontSelect();
     bindToolbar();
     bindPropPanel();
     bindOutputPanel();
     bindOsFileDrop();
+    bindLayoutResizers();
     renderMediaList();
     renderPropPanel();
     refreshButtonStates();

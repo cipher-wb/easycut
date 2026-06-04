@@ -227,6 +227,20 @@ select { cursor: pointer; }
    =================================================================== */
 #main { display: flex; flex: 1 1 auto; min-height: 0; }
 
+/* 可拖拽的面板分隔条（layout 自由调整） */
+.col-resizer {
+  flex: 0 0 5px; align-self: stretch; width: 5px;
+  cursor: col-resize; background: transparent; z-index: 50;
+  transition: background .12s ease;
+}
+.col-resizer:hover, .col-resizer.dragging { background: var(--accent-soft); }
+#timelineResizer {
+  flex: 0 0 6px; height: 6px; width: 100%;
+  cursor: ns-resize; background: transparent; z-index: 50;
+  border-top: 1px solid var(--line); transition: background .12s ease;
+}
+#timelineResizer:hover, #timelineResizer.dragging { background: var(--accent-soft); }
+
 /* ---------- 左侧素材库 #mediaPanel ---------- */
 #mediaPanel {
   flex: 0 0 244px; width: 244px;
@@ -459,7 +473,8 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
 /* 主体：左轨道头 + 右滚动区 */
 #timelineScroll {
   flex: 1 1 auto; min-height: 0;
-  display: flex; overflow-y: auto; overflow-x: hidden;
+  display: flex; align-items: flex-start;   /* 关键：子项按内容高度增长，纵向滚动才能露出全部轨道 */
+  overflow-y: auto; overflow-x: hidden;
   position: relative;
 }
 /* 左侧轨道头列 */
