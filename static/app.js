@@ -1146,7 +1146,8 @@
     switch (key) {
       case 'xPct': value = clamp01(num(value, clip.xPct)); break;
       case 'yPct': value = clamp01(num(value, clip.yPct)); break;
-      case 'wPct': value = clamp(num(value, clip.wPct), 0.02, 1); break;
+      case 'wPct': value = clamp(num(value, clip.wPct), 0.02, 1.2); break;
+      case 'hPct': value = clamp(num(value, clip.hPct), 0.02, 1.2); break;   // 框高（独立于字号）
       case 'fontSizePct': value = clamp(num(value, clip.fontSizePct), 0.01, 0.5); break;
       case 'opacity': value = clamp01(num(value, clip.opacity)); break;
       case 'boxOpacity': value = clamp01(num(value, clip.boxOpacity)); break;
@@ -1249,6 +1250,45 @@
   /* ===================================================================== *
    * 19. 导出前规范化 project（深拷贝 + clamp + 取偶，contract_v2 §6.9 / §5）
    * ===================================================================== */
+  // 导出折行：按框宽把文字算好换行（成片≈预览）。预览靠 CSS 在框宽内折行，导出
+  // 的 ffmpeg drawtext 不会自动折行——这里用 canvas 量字、按框宽插入 \n，喂给 drawtext。
+  // 缩放无关：fontPx 与 boxW 都按 output 尺寸算，比例与预览一致 → 断行位置一致。
+  var _wrapCv = null;
+  function _wrapCtx() { if (!_wrapCv) _wrapCv = document.createElement('canvas'); return _wrapCv.getContext('2d'); }
+  function wrapTextToWidth(content, fontPx, maxWidthPx) {
+    content = (content == null ? '' : '' + content);
+    if (!content || !(maxWidthPx > 0) || !(fontPx > 0)) return content;
+    var ctx = _wrapCtx();
+    ctx.font = Math.round(fontPx) + 'px "Microsoft YaHei","微软雅黑",sans-serif';
+    function w(s) { return ctx.measureText(s).width; }
+    var out = [];
+    content.split('\n').forEach(function (para) {
+      if (para === '') { out.push(''); return; }
+      // token：连续 ASCII 词 / 单个空白 / 其它单字（中文逐字断）
+      var tokens = para.match(/[A-Za-z0-9'._\-]+|\s|[\s\S]/g) || [];
+      var line = '';
+      for (var i = 0; i < tokens.length; i++) {
+        var tk = tokens[i];
+        if (w(line + tk) <= maxWidthPx || line === '') {
+          if (line === '' && w(tk) > maxWidthPx && tk.length > 1) {
+            // 单个超长词/串：硬断
+            var seg = '';
+            for (var j = 0; j < tk.length; j++) {
+              if (seg !== '' && w(seg + tk[j]) > maxWidthPx) { out.push(seg); seg = tk[j]; }
+              else seg += tk[j];
+            }
+            line = seg;
+          } else { line += tk; }
+        } else {
+          out.push(line.replace(/\s+$/, ''));
+          line = /^\s$/.test(tk) ? '' : tk;
+        }
+      }
+      out.push(line.replace(/\s+$/, ''));
+    });
+    return out.join('\n');
+  }
+
   function buildExportProject() {
     rebuildTimeline();
     var p = JSON.parse(JSON.stringify({ output: project.output, media: project.media, tracks: project.tracks }));
@@ -1284,7 +1324,8 @@
           c.duration = Math.max(0, num(c.duration, 0));
           c.xPct = clamp01(num(c.xPct, 0.1));             // B6
           c.yPct = clamp01(num(c.yPct, 0.1));
-          c.wPct = clamp(num(c.wPct, 0.5), 0.02, 1);
+          c.wPct = clamp(num(c.wPct, 0.5), 0.02, 1.2);
+          if (c.hPct != null) c.hPct = clamp(num(c.hPct, 0.16), 0.02, 1.2);  // 可选；缺省=自动高
           c.fontSizePct = clamp(num(c.fontSizePct, 0.06), 0.01, 0.5);
           c.opacity = clamp01(num(c.opacity, 1));
           c.boxOpacity = clamp01(num(c.boxOpacity, 0.5));
@@ -1293,6 +1334,11 @@
           c.border = !!c.border; c.box = !!c.box;
           if (['left', 'center', 'right'].indexOf(c.align) < 0) c.align = 'left';
           c.content = '' + (c.content == null ? '' : c.content);
+          // 按框宽自动折行（成片≈预览）：在 output 尺度上量字插 \n
+          var fontPx = c.fontSizePct * p.output.height;
+          var pad = c.box ? Math.max(2, Math.round(fontPx * 0.12)) : 0;
+          var innerW = c.wPct * p.output.width - pad * 2;
+          c.content = wrapTextToWidth(c.content, fontPx, innerW);
           return c.duration > 0;
         });
       }

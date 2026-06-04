@@ -111,6 +111,7 @@
     el.style.left = (tx.xPct * boxW) + 'px';
     el.style.top = (tx.yPct * boxH) + 'px';
     el.style.width = (tx.wPct * boxW) + 'px';
+    if (tx.hPct != null) el.style.height = (tx.hPct * boxH) + 'px';   // 显式框高（纵向拉过才有）
 
     var fontPx = (tx.fontSizePct != null ? tx.fontSizePct : 0.06) * boxH;
     el.style.fontSize = fontPx + 'px';
@@ -141,7 +142,8 @@
     content.textContent = tx.content || '';
     el.appendChild(content);
 
-    ['nw', 'ne', 'sw', 'se'].forEach(function (pos) {
+    // 四角 + 四边手柄：拖框只改框宽/框高（不动字号）；四边单轴、四角双轴
+    ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach(function (pos) {
       var hd = document.createElement('div');
       hd.className = 'tb-handle ' + pos;
       hd.dataset.handle = pos;

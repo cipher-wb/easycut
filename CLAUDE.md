@@ -46,7 +46,7 @@
 | `static/app.js` | 唯一状态源 `project` + 撤销重做 + 事件总线 `bus` + `api.*` + 素材库 + 属性面板 + 导入 + 工程序列化/加载/脏标记/relink + **评论批注 mutator**（addComment/updateComment/removeComment/setCommentStatus，进 snapshot/序列化） |
 | `static/timeline.js` | 多轨时间轴渲染与交互（拖动/裁剪/磁吸/分割/变速拖拽/缩放/快捷键分发入口）+ **评论标签层**（整轨带 + 每轨贴标签、贪心分层 `packLanes` 自动错开、右键加评论 / 编辑 / 区间 A–B 手柄） |
 | `static/player.js` | 多视频同步合成预览引擎（主时钟 + 每轨一个 `<video>` + 漂移纠偏 + playbackRate 变速） |
-| `static/overlay.js` | 画中画与文字的选中变换手柄（拖动/缩放回写百分比） |
+| `static/overlay.js` | 画中画与文字的选中变换手柄（拖动/缩放回写百分比）。**文字框 8 向手柄(nw/n/ne/e/se/s/sw/w)只改 wPct/hPct，不动字号**；单独的字号手柄(`.tb-fonth`)改 fontSizePct |
 | `static/shortcuts.js` | 剪映/CapCut 风格快捷键 + 「⌨ 快捷键」说明面板（键表与面板同源）。Ctrl+S=保存工程 / Ctrl+Shift+S=另存为 / Ctrl+E=导出 |
 | `static/projects.js` | 工程系统 UI：工程面板（启动弹出）/ 保存/另存为对话框 / 离线横幅 / relink 流程 |
 | `static/export.js` | 导出流程（pick-save → /api/export → 轮询进度） |
@@ -70,8 +70,10 @@ project = {
       //   时间轴长度由 duration 决定（与 in/out 解耦），speed=1，导出时强制静音
       { id, mediaId, freeze:true, in, out, start, speed:1, duration, scale, cx, cy, opacity }
       // 文字片段：
-      { id, content, start, duration, xPct, yPct, wPct, fontFile, fontSizePct,
+      { id, content, start, duration, xPct, yPct, wPct, hPct?, fontFile, fontSizePct,
         color, opacity, align, border, borderColor, borderWPct, box, boxColor, boxOpacity }
+      //  wPct/hPct=框宽/框高（与 fontSizePct 解耦：拖框只改框，不改字号；hPct 可选，缺省=自动高）。
+      //  文字在框宽内折行；导出由 app.js buildExportProject() 用 canvas 按框宽预折行(插\n)喂 drawtext，成片≈预览。
     ]
   } ],
   // 时间轴批注（导演式剪辑指令，给 AI 执行；不直接改剪辑）。见 §评论系统

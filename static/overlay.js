@@ -205,14 +205,18 @@
     var handle = e.target.dataset ? e.target.dataset.handle : null;
     var mode = 'move';
     if (handle === 'font') mode = 'font';
-    else if (handle) mode = 'resize-' + handle;   // nw/ne/sw/se
+    else if (handle) mode = 'resize-' + handle;   // nw/n/ne/e/se/s/sw/w
 
     var tx = loc.clip;
+    // 框高 hPct 缺省=自动高；纵向拖动需要个起点，按当前渲染高度初始化
+    var bs0 = box();
+    var origHPct = (tx.hPct != null) ? tx.hPct
+                 : (bs0 && bs0.boxH ? clamp(node.offsetHeight / bs0.boxH, 0.02, 1.2) : 0.16);
     pushHistory();
     drag = {
       kind: 'text', mode: mode, clipId: clipId, trackId: loc.trackId,
       startX: e.clientX, startY: e.clientY,
-      orig: { xPct: tx.xPct, yPct: tx.yPct, wPct: tx.wPct, fontSizePct: tx.fontSizePct }
+      orig: { xPct: tx.xPct, yPct: tx.yPct, wPct: tx.wPct, hPct: origHPct, fontSizePct: tx.fontSizePct }
     };
     try { node.setPointerCapture(e.pointerId); } catch (x) {}
     e.preventDefault(); e.stopPropagation();
@@ -233,14 +237,25 @@
     } else if (drag.mode === 'font') {
       patch.fontSizePct = clamp(drag.orig.fontSizePct + dyPct, 0.01, 0.5);
     } else if (drag.mode.indexOf('resize') === 0) {
-      var corner = drag.mode.split('-')[1];                  // nw/ne/sw/se
-      var signX = (corner === 'ne' || corner === 'se') ? 1 : -1;  // 右侧角向右拉变宽
-      var newW = clamp(drag.orig.wPct + signX * dxPct, 0.05, 1.2);
-      var ratio = drag.orig.wPct > 0 ? newW / drag.orig.wPct : 1;
-      patch.wPct = newW;
-      patch.fontSizePct = clamp(drag.orig.fontSizePct * ratio, 0.01, 0.5);
-      if (signX < 0) {   // 左侧角: 左缘跟随移动以保持右缘不动
-        patch.xPct = clamp(drag.orig.xPct - (newW - drag.orig.wPct), -0.2, 1);
+      // 拖框只改框宽/框高，绝不动字号（字号交给字号手柄/属性面板）
+      var h = drag.mode.split('-')[1];                       // nw/n/ne/e/se/s/sw/w
+      var west = (h === 'nw' || h === 'w' || h === 'sw');
+      var east = (h === 'ne' || h === 'e' || h === 'se');
+      var north = (h === 'nw' || h === 'n' || h === 'ne');
+      var south = (h === 'sw' || h === 's' || h === 'se');
+      if (east) {
+        patch.wPct = clamp(drag.orig.wPct + dxPct, 0.02, 1.2);
+      } else if (west) {                                     // 左缘动、右缘不动
+        var newW = clamp(drag.orig.wPct - dxPct, 0.02, 1.2);
+        patch.wPct = newW;
+        patch.xPct = clamp(drag.orig.xPct + drag.orig.wPct - newW, -0.2, 1);
+      }
+      if (south) {
+        patch.hPct = clamp(drag.orig.hPct + dyPct, 0.02, 1.2);
+      } else if (north) {                                    // 上缘动、下缘不动
+        var newH = clamp(drag.orig.hPct - dyPct, 0.02, 1.2);
+        patch.hPct = newH;
+        patch.yPct = clamp(drag.orig.yPct + drag.orig.hPct - newH, -0.2, 1);
       }
     }
     drag.lastPatch = patch;
