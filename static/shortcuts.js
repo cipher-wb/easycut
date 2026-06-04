@@ -267,9 +267,21 @@
 
   // 输入框聚焦时仍放行的全局键（contract §7：仅撤销/重做/Esc）
   var ALLOW_WHILE_TYPING = { 'ctrl+z': 1, 'ctrl+shift+z': 1, 'ctrl+y': 1, 'escape': 1, 'ctrl+s': 1, 'ctrl+shift+s': 1 };
+  // AI 执行期间仅放行"查看/导航类"键，编辑类一律拦下（避免与 AI 改动冲突）
+  var ALLOW_WHILE_BUSY = {
+    'space': 1, 'arrowleft': 1, 'arrowright': 1, 'shift+arrowleft': 1, 'shift+arrowright': 1,
+    'arrowup': 1, 'arrowdown': 1, '+': 1, '=': 1, '-': 1, '_': 1, 'home': 1, 'end': 1,
+    'escape': 1, 'f1': 1, '?': 1, 'shift+?': 1
+  };
 
   document.addEventListener('keydown', function (e) {
     var combo = normalize(e);
+
+    // AI 执行期间禁止手动编辑：拦下编辑类快捷键
+    if (App.isBusy && App.isBusy() && !ALLOW_WHILE_BUSY[combo]) {
+      if (TABLE[combo] && !isTyping(e)) e.preventDefault();
+      return;
+    }
 
     if (isTyping(e)) {
       if (combo === 'escape') { if (e.target && e.target.blur) e.target.blur(); return; }

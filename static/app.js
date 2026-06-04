@@ -2310,9 +2310,24 @@
   }
 
   /* ===================================================================== *
+   * 26.5 全局忙锁：AI 执行期间禁止手动编辑（避免与 AI 的程序化改动冲突）
+   *   只锁"用户输入层"（body.app-busy → CSS 禁用编辑区指针 + 快捷键 guard），
+   *   AI 自己走 App.* mutator 不受影响。
+   * ===================================================================== */
+  var _busy = false;
+  function setBusy(b) {
+    _busy = !!b;
+    try { document.body.classList.toggle('app-busy', _busy); } catch (e) {}
+    var h = document.getElementById('busyHint'); if (h) h.hidden = !_busy;
+    bus.emit('busy:changed', _busy);
+  }
+  function isBusy() { return _busy; }
+
+  /* ===================================================================== *
    * 27. 暴露 window.App（contract_v2 §3.2 全部方法）
    * ===================================================================== */
   var App = {
+    setBusy: setBusy, isBusy: isBusy,
     // 状态访问
     project: project,
     bus: bus,

@@ -1080,6 +1080,26 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
 }
 #aiInput:focus { outline: none; border-color: var(--accent); }
 #aiSend { flex: 0 0 auto; align-self: stretch; min-width: 56px; }
+
+/* AI 执行期间：锁住所有手动编辑面（保留预览查看与 AI 面板交互） */
+body.app-busy #toolbar,
+body.app-busy #mediaPanel,
+body.app-busy #overlayLayer,
+body.app-busy #propPanel,
+body.app-busy #timelinePanel {
+  pointer-events: none;
+  opacity: .55;
+  filter: saturate(.85);
+  transition: opacity .15s ease;
+}
+/* 编辑锁提示条（顶部居中悬浮） */
+#busyHint {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+  z-index: 100030; pointer-events: none;
+  background: var(--accent); color: #fff; font-size: 13px; font-weight: 600;
+  padding: 8px 16px; border-radius: 999px; box-shadow: var(--shadow-pop);
+  letter-spacing: .5px; white-space: nowrap;
+}
 /* @标记 自动联想下拉（挂在 body 上，定位在输入框上方） */
 .ai-ac {
   position: fixed; z-index: 100020; max-height: 200px; overflow-y: auto;

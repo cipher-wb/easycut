@@ -657,7 +657,11 @@ stateSnapshot()
     } catch (e) { return false; }
   }
 
-  function setBusy(b) { if (elSend) { elSend.disabled = b; elSend.textContent = b ? '…' : '发送'; } if (elInput) elInput.disabled = b; }
+  function setBusy(b) {
+    if (elSend) { elSend.disabled = b; elSend.textContent = b ? '…' : '发送'; }
+    if (elInput) elInput.disabled = b;
+    if (App.setBusy) App.setBusy(b);   // 全局锁：AI 执行期间禁止手动编辑时间轴
+  }
 
   function confirmPlan(summaries) {
     return new Promise(function (resolve) {
