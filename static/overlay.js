@@ -396,8 +396,15 @@
     content.addEventListener('keydown', onEditKey);
   }
   function onEditKey(e) {
-    if (e.key === 'Escape') { e.preventDefault(); finishEditing(); }
-    else if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finishEditing(); }
+    if (e.key === 'Escape' || (e.key === 'Enter' && (e.ctrlKey || e.metaKey))) {
+      // Esc / Ctrl+Enter = 结束编辑
+      e.preventDefault(); finishEditing();
+    } else if (e.key === 'Enter') {
+      // 普通回车 = 换行（插入 <br>，innerText 读为 \n）；点别处 / Ctrl+Enter / Esc 才结束
+      e.preventDefault();
+      try { document.execCommand('insertLineBreak'); }
+      catch (x) { document.execCommand('insertHTML', false, '<br>'); }
+    }
     e.stopPropagation();   // 不让 shortcuts 拦截
   }
   function onEditBlur() { finishEditing(); }
