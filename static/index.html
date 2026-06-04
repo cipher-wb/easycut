@@ -367,13 +367,23 @@
             <input type="number" id="numOutHeight" min="2" step="2" />
           </label>
         </div>
+        <label class="field">
+          <span>导出质量 / 体积</span>
+          <select id="selQuality">
+            <option value="18">高画质（清晰，文件大）</option>
+            <option value="23">标准（推荐）</option>
+            <option value="28">小体积（适合上传）</option>
+            <option value="32">极小（画质一般，最省空间）</option>
+            <option value="custom">自定义（用下面的 CRF）</option>
+          </select>
+        </label>
         <div class="row two">
           <label class="field">
             <span>帧率 fps</span>
             <input type="number" id="numOutFps" min="1" max="120" step="1" />
           </label>
           <label class="field">
-            <span>画质 CRF（小=清晰）</span>
+            <span>画质 CRF（进阶；小=清晰）</span>
             <input type="number" id="numCrf" min="0" max="51" step="1" />
           </label>
         </div>

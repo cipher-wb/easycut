@@ -1742,11 +1742,17 @@
    * ===================================================================== */
   function bindOutputPanel() {
     var w = $('numOutWidth'), h = $('numOutHeight'), fps = $('numOutFps'), crf = $('numCrf'),
-        audio = $('chkKeepAudio'), preset = $('selResPreset');
+        audio = $('chkKeepAudio'), preset = $('selResPreset'), qual = $('selQuality');
     if (w) w.addEventListener('change', function () { if (preset) preset.value = 'custom'; setOutputProp('width', w.value); });
     if (h) h.addEventListener('change', function () { if (preset) preset.value = 'custom'; setOutputProp('height', h.value); });
     if (fps) fps.addEventListener('change', function () { setOutputProp('fps', fps.value); });
-    if (crf) crf.addEventListener('change', function () { setOutputProp('crf', crf.value); });
+    if (crf) crf.addEventListener('change', function () { setOutputProp('crf', crf.value); syncOutputPanel(); });
+    // 导出质量档位：大白话→CRF（底层仍是 crf）。选「自定义」则交给下面的 CRF 数字框。
+    if (qual) qual.addEventListener('change', function () {
+      if (qual.value === 'custom') return;       // 保持当前 CRF，由数字框驱动
+      setOutputProp('crf', parseInt(qual.value, 10));
+      syncOutputPanel();
+    });
     if (audio) audio.addEventListener('change', function () { setOutputProp('keepAudio', audio.checked); });
     if (preset) preset.addEventListener('change', function () {
       var v = preset.value;
@@ -1759,12 +1765,18 @@
     syncOutputPanel();
   }
   function syncOutputPanel() {
-    var w = $('numOutWidth'), h = $('numOutHeight'), fps = $('numOutFps'), crf = $('numCrf'), audio = $('chkKeepAudio');
+    var w = $('numOutWidth'), h = $('numOutHeight'), fps = $('numOutFps'), crf = $('numCrf'),
+        audio = $('chkKeepAudio'), qual = $('selQuality');
     if (w) w.value = project.output.width;
     if (h) h.value = project.output.height;
     if (fps) fps.value = project.output.fps;
     if (crf) crf.value = project.output.crf;
     if (audio) audio.checked = !!project.output.keepAudio;
+    // 质量下拉跟随当前 CRF：命中档位则选中，否则显示「自定义」
+    if (qual) {
+      var c = String(project.output.crf);
+      qual.value = (['18', '23', '28', '32'].indexOf(c) >= 0) ? c : 'custom';
+    }
   }
   bus.on('output:changed', syncOutputPanel);
 
