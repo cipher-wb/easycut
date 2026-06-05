@@ -1950,23 +1950,39 @@ class Handler(BaseHTTPRequestHandler):
 # ---------------------------------------------------------------------------
 # 启动
 # ---------------------------------------------------------------------------
-def find_free_port(host, start_port, max_tries=50):
+def bind_server(host, start_port, handler, max_tries=80):
+    """从 start_port 起找一个**能真正绑定**的端口并创建 ThreadingHTTPServer，返回 (httpd, port)。
+    边找边绑，彻底避免"先探测端口、再单独绑定"之间的竞态与误判：
+      - 有进程在监听(connect 成功) → 端口被占用 → 跳过；
+      - TIME_WAIT 残留套接字 → ThreadingHTTPServer.allow_reuse_address=1 能重绑 → 可用；
+      - 系统保留/权限不足端口(Hyper-V/WSL 动态保留段，bind 抛 WinError 10013) → 跳过下一个。
+    （此前的纯连接探测会把"保留端口"误判为可用，导致实际 bind 抛 10013 崩溃。）"""
     import socket
+    last_err = None
     port = start_port
     for _ in range(max_tries):
-        # 用「连接探测」判断占用：能连上 = 有进程在监听(真占用) → 跳过；
-        # 连不上(含 TIME_WAIT 残留套接字) = 可用 —— ThreadingHTTPServer.allow_reuse_address=1
-        # 能重绑 TIME_WAIT 端口，所以不能因 TIME_WAIT 就误判占用（否则关掉再开/测试残留会无端口可用）。
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(0.25)
+        # 1) 有进程在监听？连得上=占用，直接跳过
+        cs = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        cs.settimeout(0.2)
+        listening = False
         try:
-            s.connect((host, port))
-            s.close()                 # 连上了 → 端口正被监听，占用
-            port += 1
+            cs.connect((host, port))
+            listening = True
         except OSError:
-            s.close()
-            return port               # 连不上 → 可用（包括 TIME_WAIT）
-    raise OSError("找不到可用端口（从 %d 起试了 %d 个）" % (start_port, max_tries))
+            listening = False
+        finally:
+            cs.close()
+        if listening:
+            port += 1
+            continue
+        # 2) 没人监听 → 真正创建服务器（TIME_WAIT 可重绑；保留端口/权限不足会抛 OSError → 换下一个）
+        try:
+            return ThreadingHTTPServer((host, port), handler), port
+        except OSError as e:
+            last_err = e
+            port += 1
+            continue
+    raise last_err or OSError("找不到可用端口（从 %d 起试了 %d 个）" % (start_port, max_tries))
 
 
 # =====================================================================
@@ -2078,10 +2094,8 @@ def main():
     mimetypes.add_type("application/javascript", ".js")
     mimetypes.add_type("text/css", ".css")
 
-    port = find_free_port(HOST, DEFAULT_PORT)
+    httpd, port = bind_server(HOST, DEFAULT_PORT, Handler)   # 边找边绑：跳过占用/保留端口，TIME_WAIT 可重绑
     url = "http://%s:%d/" % (HOST, port)
-
-    httpd = ThreadingHTTPServer((HOST, port), Handler)
     httpd.daemon_threads = True
 
     print("=" * 60)
