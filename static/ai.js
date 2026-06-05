@@ -700,6 +700,7 @@ stateSnapshot()
       dlg.querySelector('#aiCfgBase').value = c.baseURL || '';
       dlg.querySelector('#aiCfgModel').value = c.model || '';
       var keyEl = dlg.querySelector('#aiCfgKey'); keyEl.value = ''; keyEl.placeholder = c.hasKey ? ('已配置（末4位 ' + (c.keyTail || '') + '），留空＝不变') : '填入 API Key';
+      var pEl = dlg.querySelector('#aiCfgPath'); if (pEl) pEl.textContent = c.configPath || '—';
       if (typeof dlg.showModal === 'function') dlg.showModal(); else dlg.setAttribute('open', '');
     });
   }
@@ -803,6 +804,14 @@ stateSnapshot()
     if (dlg) {
       var sv = dlg.querySelector('#aiCfgSave'); if (sv) sv.addEventListener('click', saveConfig);
       var cc = dlg.querySelector('#aiCfgCancel'); if (cc) cc.addEventListener('click', closeConfig);
+      var rv = dlg.querySelector('#aiCfgReveal');
+      if (rv) rv.addEventListener('click', function () {
+        var p = cfgCache && cfgCache.configPath;
+        if (!p) { App.toast && App.toast('尚无配置文件路径', 'info'); return; }
+        if (App.api && App.api.reveal) App.api.reveal(p).then(function (r) {
+          if (!(r && r.ok)) App.toast && App.toast('配置文件：' + p, 'info', 4000);
+        }).catch(function () { App.toast && App.toast('配置文件：' + p, 'info', 4000); });
+      });
     }
 
     // 「▶ 执行批注」按钮 + 待执行计数（随评论变化更新）

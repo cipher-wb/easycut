@@ -1227,7 +1227,82 @@ def _ai_masked(cfg):
         "maxTokens": cfg.get("maxTokens"),
         "hasKey": bool(key),
         "keyTail": key[-4:] if key else "",
+        "configPath": AI_CONFIG_PATH.replace("\\", "/"),   # 配置文件位置（让用户知道 Key 存哪）
     }
+
+
+# ---------------------------------------------------------------------------
+# 使用说明（把 README.md 渲染成应用内可读的帮助页）
+# ---------------------------------------------------------------------------
+def _md_to_html(md):
+    """极简 Markdown → HTML（标题/代码块/表格/列表/引用/粗体/行内码/链接）。够当帮助页读。"""
+    import re
+    def esc(s): return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    def inline(s):
+        s = esc(s)
+        # 放行 README 里少量安全内联标签（自家内容，本地页面）
+        for tg in ("sub", "sup", "small", "br", "b", "i"):
+            s = s.replace("&lt;%s&gt;" % tg, "<%s>" % tg).replace("&lt;/%s&gt;" % tg, "</%s>" % tg)
+        s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        s = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+        s = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2" target="_blank">\1</a>', s)
+        return s
+    lines = md.replace("\r\n", "\n").split("\n")
+    out, i, n = [], 0, len(md.replace("\r\n", "\n").split("\n"))
+    while i < n:
+        ln = lines[i]
+        if ln.strip().startswith("```"):
+            i += 1; buf = []
+            while i < n and not lines[i].strip().startswith("```"):
+                buf.append(esc(lines[i])); i += 1
+            i += 1; out.append("<pre class='cb'>" + "\n".join(buf) + "</pre>"); continue
+        if ln.strip().startswith("|") and i + 1 < n and re.match(r"^\s*\|[\s:|-]+\|\s*$", lines[i + 1]):
+            head = [c.strip() for c in ln.strip().strip("|").split("|")]; i += 2; rows = []
+            while i < n and lines[i].strip().startswith("|"):
+                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")]); i += 1
+            t = "<table><thead><tr>" + "".join("<th>" + inline(h) + "</th>" for h in head) + "</tr></thead><tbody>"
+            for r in rows: t += "<tr>" + "".join("<td>" + inline(c) + "</td>" for c in r) + "</tr>"
+            out.append(t + "</tbody></table>"); continue
+        m = re.match(r"^(#{1,6})\s+(.*)$", ln)
+        if m: out.append("<h%d>%s</h%d>" % (len(m.group(1)), inline(m.group(2)), len(m.group(1)))); i += 1; continue
+        if re.match(r"^\s*---+\s*$", ln): out.append("<hr>"); i += 1; continue
+        if ln.strip().startswith(">"):
+            buf = []
+            while i < n and lines[i].strip().startswith(">"):
+                buf.append(inline(lines[i].strip().lstrip(">").strip())); i += 1
+            out.append("<blockquote>" + "<br>".join(buf) + "</blockquote>"); continue
+        if re.match(r"^\s*[-*]\s+", ln):
+            buf = []
+            while i < n and re.match(r"^\s*[-*]\s+", lines[i]):
+                buf.append("<li>" + inline(re.sub(r"^\s*[-*]\s+", "", lines[i])) + "</li>"); i += 1
+            out.append("<ul>" + "".join(buf) + "</ul>"); continue
+        if re.match(r"^\s*\d+\.\s+", ln):
+            buf = []
+            while i < n and re.match(r"^\s*\d+\.\s+", lines[i]):
+                buf.append("<li>" + inline(re.sub(r"^\s*\d+\.\s+", "", lines[i])) + "</li>"); i += 1
+            out.append("<ol>" + "".join(buf) + "</ol>"); continue
+        if ln.strip() == "": i += 1; continue
+        buf = [inline(ln)]; i += 1
+        while i < n and lines[i].strip() != "" and not lines[i].strip().startswith("```") \
+                and not re.match(r"^(#{1,6}\s|\s*[-*]\s|\s*\d+\.\s|>|\||\s*---+\s*$)", lines[i]):
+            buf.append(inline(lines[i])); i += 1
+        out.append("<p>" + "<br>".join(buf) + "</p>")
+    return "\n".join(out)
+
+
+_HELP_CSS = (
+    "body{margin:0;background:#F0EEE6;color:#3A3631;"
+    "font:15px/1.75 'Microsoft YaHei','微软雅黑',sans-serif}"
+    ".wrap{max-width:880px;margin:0 auto;padding:30px 26px 90px}"
+    "h1{font-size:26px;border-bottom:2px solid #D97757;padding-bottom:8px}"
+    "h2{font-size:20px;margin-top:34px;color:#B85C3C}h3{font-size:16px;margin-top:22px}"
+    "code{background:#E7E3D8;padding:1px 5px;border-radius:4px;font-family:Consolas,monospace;font-size:.9em}"
+    "pre.cb{background:#2B2722;color:#EDE6DA;padding:12px 14px;border-radius:8px;overflow:auto;line-height:1.5}"
+    "table{border-collapse:collapse;width:100%;margin:12px 0}"
+    "th,td{border:1px solid #D5CFC0;padding:6px 10px;text-align:left}th{background:#E7E3D8}"
+    "blockquote{border-left:3px solid #D97757;margin:12px 0;padding:6px 14px;background:#fff;color:#6b645b}"
+    "a{color:#B85C3C}hr{border:none;border-top:1px solid #D5CFC0;margin:24px 0}ul,ol{padding-left:24px}"
+)
 
 
 def ai_chat_complete(system, messages):
@@ -1366,6 +1441,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"fonts": list_fonts()})
             elif path == "/api/caps":
                 self._handle_caps()
+            elif path == "/help":
+                self._handle_help()
             elif path == "/api/ai/config":
                 self._handle_ai_config_get()
             elif path == "/favicon.ico":
@@ -1428,6 +1505,35 @@ class Handler(BaseHTTPRequestHandler):
     # ---- AI 助手 ----
     def _handle_ai_config_get(self):
         self._send_json(_ai_masked(load_ai_config()))
+
+    # ---- /help（应用内「使用说明」：渲染 README.md）----
+    def _handle_help(self):
+        md = None
+        for d in (RESOURCE_DIR, BASE_DIR):
+            p = os.path.join(d, "README.md")
+            if os.path.isfile(p):
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        md = f.read()
+                    break
+                except Exception:
+                    pass
+        if md is None:
+            self._send_error_json(404, "未找到使用说明（README.md）")
+            return
+        page = ("<!doctype html><html lang=zh><head><meta charset=utf-8>"
+                "<meta name=viewport content='width=device-width,initial-scale=1'>"
+                "<title>Lyra 使用说明</title><style>%s</style></head>"
+                "<body><div class=wrap>%s</div></body></html>") % (_HELP_CSS, _md_to_html(md))
+        body = page.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def _handle_ai_config_save(self):
         body = self._read_json_body()

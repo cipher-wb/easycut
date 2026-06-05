@@ -13,6 +13,7 @@ datas = [
     (os.path.join(ROOT, 'static'), 'static'),
     (os.path.join(ROOT, 'picker.py'), '.'),
     (os.path.join(ROOT, 'ai_config.example.json'), '.'),
+    (os.path.join(ROOT, 'README.md'), '.'),   # 应用内「使用说明」(/help) 读它
 ]
 binaries = []
 hiddenimports = ['server', 'ffmpeg_build']

@@ -1961,6 +1961,10 @@
     var bim = $('btnImportMini');
     if (bim) bim.addEventListener('click', openFilePicker);
 
+    // 使用说明：打开 /help（README 渲染页）。桌面窗口里 window.open 会用系统浏览器开。
+    var bhelp = $('btnHelp');
+    if (bhelp) bhelp.addEventListener('click', function () { try { window.open('/help', '_blank'); } catch (e) {} });
+
     var bat = $('btnAddText');
     if (bat) bat.addEventListener('click', function () {
       var id = addTextClip(null, getPlayhead());

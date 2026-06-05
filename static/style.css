@@ -1148,6 +1148,16 @@ body.app-busy #timelinePanel {
   background: var(--input-bg); color: var(--text);
 }
 .ai-cfg-box .field input:focus, .ai-cfg-box .field select:focus { outline: none; border-color: var(--accent); }
+.ai-cfg-path {
+  margin-top: 14px; padding: 9px 11px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--text-dim); line-height: 1.7;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+}
+.ai-cfg-path code {
+  background: var(--panel-3); color: var(--text); padding: 2px 6px; border-radius: 4px;
+  font-family: Consolas, monospace; font-size: 11px; word-break: break-all; flex: 1 1 100%;
+}
 .ai-cfg-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
 
 /* 移动端：AI 面板改为占满（简易处理） */

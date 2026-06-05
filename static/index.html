@@ -62,6 +62,7 @@
       </div>
     </div>
     <div class="tb-group">
+      <button id="btnHelp" type="button" title="使用说明 / 帮助（含如何接入大模型）">📖 使用说明</button>
       <button id="btnShortcuts" type="button" title="查看全部快捷键 (F1 或 ?)">⌨ 快捷键</button>
     </div>
     <div class="tb-group">
@@ -545,6 +546,11 @@
       <label class="field"><span>模型名称</span>
         <input type="text" id="aiCfgModel" placeholder="deepseek-v4-pro" />
       </label>
+      <div class="ai-cfg-path">
+        <span>配置文件（含你的 Key，保存在本机）：</span>
+        <code id="aiCfgPath">—</code>
+        <button type="button" id="aiCfgReveal" class="mini" title="在资源管理器中打开该文件">📂 打开文件夹</button>
+      </div>
       <div class="ai-cfg-actions">
         <button type="button" id="aiCfgSave" class="primary">保存</button>
         <button type="button" id="aiCfgCancel">取消</button>
