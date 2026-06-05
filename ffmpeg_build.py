@@ -734,15 +734,18 @@ def find_ffprobe():
 
 
 def _find_tool(name):
-    import shutil
+    import shutil, sys
+    # 同目录/同 exe 目录回退：把 ffmpeg.exe / ffprobe.exe 放在本程序旁边即可（无需改 PATH）。
+    # 打包成 exe(frozen) 后优先用随包附带的 ffmpeg —— 放在 Lyra.exe 旁边或 ffmpeg\ 子目录。
+    here = os.path.dirname(os.path.abspath(__file__))
+    exedir = os.path.dirname(os.path.abspath(sys.executable))
+    for d in (exedir, os.path.join(exedir, "ffmpeg"), here):
+        p = os.path.join(d, name + ".exe")
+        if os.path.isfile(p):
+            return p
     exe = shutil.which(name)
     if exe:
         return exe
-    # 同目录回退：把 ffmpeg.exe / ffprobe.exe 直接放在本程序旁边即可（无需改 PATH）
-    here = os.path.dirname(os.path.abspath(__file__))
-    local_exe = os.path.join(here, name + ".exe")
-    if os.path.isfile(local_exe):
-        return local_exe
     candidates = []
     localapp = os.environ.get("LOCALAPPDATA")
     if localapp:

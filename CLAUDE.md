@@ -26,7 +26,7 @@
 3. **回退② `webbrowser.open`** —— 连浏览器都没有时，开普通标签（保留控制台）。
 - `--no-app`/`--server-only`/`--browser` 任一参数 → 强制浏览器标签模式（开发用）。
 - 用户入口：`Lyra.pyw`（`.pyw` 由 pythonw 运行，**无黑窗**，日常首选；已替代旧的 VBS——VBScript 被微软弃用）；`排错启动(看日志).bat`（py 运行、保留命令行日志窗，仅排错用，内容纯 ASCII）。
-- 打包路线（稳定后）：PyInstaller 把 `server.py`+`static/` 打成单 exe（pywebview 一起进去），同事零 Python 依赖；ffmpeg 是否一并打包另议。**不要用 Tauri**（要 Rust/Node/VS Build Tools 工具链 + 重写后端，对保留 Python 的场景过重，已评估否决）。
+- **打包已实现**（PyInstaller onedir + Inno Setup → `Lyra-Setup-1.0.0.exe`，内置 ffmpeg，每用户安装无需管理员）：见 `packaging/`（`build.ps1` 一键、`Lyra.spec`、`Lyra.iss`、`README.md`）。冻结(frozen)要点：`server.py` 用 `RESOURCE_DIR`(_MEIPASS 只读) / `DATA_DIR`(%LOCALAPPDATA%\Lyra 用户数据) 分流；`native_save()` 替代冻结后失效的 picker.py 子进程；`ffmpeg_build._find_tool` 优先找 exe 同目录 ffmpeg。`dist/`、`build/`、`packaging/ffmpeg/` 均 .gitignore。**不要用 Tauri**（要 Rust/Node/VS Build Tools + 重写后端，已评估否决）。
 
 ## 怎么运行 / 怎么测
 - 装外壳依赖（一次）：`python -m pip install -r requirements.txt`（装 pywebview；不装则自动回退 Edge --app）。

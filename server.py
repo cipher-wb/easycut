@@ -50,8 +50,21 @@ if BASE_DIR not in sys.path:
 
 import ffmpeg_build  # noqa: E402
 
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-PICKER_PY = os.path.join(BASE_DIR, "picker.py")
+# 冻结(PyInstaller)与开发两种形态的路径分流：
+#   RESOURCE_DIR = 只读资源(static / picker)：冻结时在 PyInstaller 解包目录 _MEIPASS，开发时=源码目录。
+#   DATA_DIR     = 用户可写数据(工程 / 素材库 / AI 配置)：冻结时放 %LOCALAPPDATA%\Lyra
+#                  （装到 Program Files 后程序目录通常不可写），开发时仍放源码目录（行为不变）。
+_FROZEN = bool(getattr(sys, "frozen", False))
+RESOURCE_DIR = getattr(sys, "_MEIPASS", BASE_DIR) if _FROZEN else BASE_DIR
+if _FROZEN:
+    _appdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    DATA_DIR = os.path.join(_appdata, "Lyra")
+else:
+    DATA_DIR = BASE_DIR
+os.makedirs(DATA_DIR, exist_ok=True)
+
+STATIC_DIR = os.path.join(RESOURCE_DIR, "static")
+PICKER_PY = os.path.join(RESOURCE_DIR, "picker.py")
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 STREAM_CHUNK = 64 * 1024  # 64KB/块
@@ -65,9 +78,9 @@ APP_PROFILE_DIR = os.path.join(WORK_ROOT, "appwindow")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 
-# 工程库 / 持久素材库（app 目录下，便携；见 project_design.md §1.1）
-PROJECTS_DIR = os.path.join(BASE_DIR, "projects")           # 工程库：projects/<id>/project.json
-MEDIA_STORE_DIR = os.path.join(BASE_DIR, "media_store")     # 持久素材库：/api/upload 副本落点
+# 工程库 / 持久素材库（用户数据，写到 DATA_DIR；冻结时即 %LOCALAPPDATA%\Lyra）
+PROJECTS_DIR = os.path.join(DATA_DIR, "projects")           # 工程库：projects/<id>/project.json
+MEDIA_STORE_DIR = os.path.join(DATA_DIR, "media_store")     # 持久素材库：/api/upload 副本落点
 MEDIA_THUMB_DIR = os.path.join(MEDIA_STORE_DIR, "thumbs")   # 可选缩略图缓存（预留）
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 os.makedirs(MEDIA_STORE_DIR, exist_ok=True)
@@ -386,6 +399,27 @@ def native_pick(multiple=True):
         return [os.path.abspath(p) for p in res]
     except Exception as e:
         print("[native_pick] 失败，回退 tkinter：", e)
+        return None
+
+
+def native_save(suggest_name="导出视频.mp4"):
+    """用 pywebview 原生「另存为」对话框，返回绝对路径。
+    None=不可用（上层回退 tkinter picker）；""=用户取消；否则=路径。
+    冻结(exe)模式下必须走这个——picker.py 子进程在 frozen 里调 sys.executable 会变成重启自己。"""
+    win = _pywebview_window
+    if win is None:
+        return None
+    try:
+        import webview
+        res = win.create_file_dialog(
+            webview.SAVE_DIALOG, save_filename=suggest_name,
+            file_types=("MP4 视频 (*.mp4)", "所有文件 (*.*)"))
+        if not res:
+            return ""
+        path = res[0] if isinstance(res, (list, tuple)) else res
+        return os.path.abspath(path)
+    except Exception as e:
+        print("[native_save] 失败，回退 tkinter：", e)
         return None
 
 
@@ -1138,7 +1172,7 @@ def _decode_header_word(s):
 # .gitignore），浏览器只连 127.0.0.1，因此没有 CORS 问题、Key 也不进前端/不分发。
 # 纯标准库 urllib，不引入任何 pip 依赖；只有用户真正使用 AI 时才会联网。
 # ===========================================================================
-AI_CONFIG_PATH = os.path.join(BASE_DIR, "ai_config.json")
+AI_CONFIG_PATH = os.path.join(DATA_DIR, "ai_config.json")
 AI_DEFAULT = {
     "protocol": "openai",                       # openai 兼容 | claude
     "baseURL": "https://api.deepseek.com",      # OpenAI 兼容地址，程序自动追加 /chat/completions
@@ -1550,8 +1584,13 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_pick_save(self):
         body = self._read_json_body()
         suggest = body.get("suggestName") or "导出视频.mp4"
-        picked = run_picker("save", suggest_name=suggest)
-        path = picked.get("path")
+        # 优先 pywebview 原生另存为（冻结/桌面下可靠）；不可用再退回 tkinter picker。
+        res = native_save(suggest)
+        if res is None:
+            picked = run_picker("save", suggest_name=suggest)
+            path = picked.get("path")
+        else:
+            path = res or None
         if path:
             path = os.path.abspath(path).replace("\\", "/")
         self._send_json({"path": path})

@@ -23,3 +23,11 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# 打包产物（PyInstaller / 安装程序）——不进仓库，体积大
+build/
+dist/
+*.spec.bak
+
+# 打包用 ffmpeg 二进制（体积大，不进仓库；打包脚本会拷进 dist）
+packaging/ffmpeg/
