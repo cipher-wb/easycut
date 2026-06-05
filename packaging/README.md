@@ -7,6 +7,9 @@
   - 双击 → 每用户安装（**无需管理员**）到 `%LOCALAPPDATA%\Programs\Lyra`，建开始菜单/桌面快捷方式。
   - 内置 **ffmpeg/ffprobe**，同事电脑无需另装 Python / ffmpeg / 浏览器（WebView2 一般系统自带）。
   - 用户数据（工程 / 素材库 / AI 配置）写到 `%LOCALAPPDATA%\Lyra`，不污染安装目录。
+  - **使用说明**：装好后开始菜单 Lyra 文件夹里有「**Lyra 使用说明**」快捷方式（打开 `使用说明.html`，
+    由 README 渲染、只含使用者部分）；应用内顶栏也有「📖 使用说明」按钮。打包时由 `gen_help.py`
+    （`server.build_help_html()`，截到「## 给开发者」之前）生成进 `dist\Lyra\使用说明.html`。
 
 ## 一键重建
 前置（每台打包机一次）：

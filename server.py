@@ -1305,6 +1305,34 @@ _HELP_CSS = (
 )
 
 
+def read_readme():
+    """读 README.md（冻结时在 RESOURCE_DIR，开发时在源码目录）。找不到返回 None。"""
+    for d in (RESOURCE_DIR, BASE_DIR):
+        p = os.path.join(d, "README.md")
+        if os.path.isfile(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+    return None
+
+
+def build_help_html():
+    """把 README.md 渲染成一份**面向使用者**的独立帮助页（截掉「给开发者」及之后的章节）。
+    /help 路由与打包时生成的「使用说明.html」共用它。找不到 README 返回 None。"""
+    md = read_readme()
+    if md is None:
+        return None
+    idx = md.find("## 给开发者")          # 只保留使用者部分，去掉开发者/打包等
+    if idx > 0:
+        md = md[:idx].rstrip()
+    return ("<!doctype html><html lang=zh><head><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>Lyra 使用说明</title><style>%s</style></head>"
+            "<body><div class=wrap>%s</div></body></html>") % (_HELP_CSS, _md_to_html(md))
+
+
 def ai_chat_complete(system, messages):
     """调用用户配置的大模型，返回助手文本。失败抛 ValueError（带中文消息）。"""
     cfg = load_ai_config()
@@ -1506,25 +1534,12 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_ai_config_get(self):
         self._send_json(_ai_masked(load_ai_config()))
 
-    # ---- /help（应用内「使用说明」：渲染 README.md）----
+    # ---- /help（应用内「使用说明」：渲染 README.md，只给使用者看的部分）----
     def _handle_help(self):
-        md = None
-        for d in (RESOURCE_DIR, BASE_DIR):
-            p = os.path.join(d, "README.md")
-            if os.path.isfile(p):
-                try:
-                    with open(p, "r", encoding="utf-8") as f:
-                        md = f.read()
-                    break
-                except Exception:
-                    pass
-        if md is None:
+        page = build_help_html()
+        if page is None:
             self._send_error_json(404, "未找到使用说明（README.md）")
             return
-        page = ("<!doctype html><html lang=zh><head><meta charset=utf-8>"
-                "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                "<title>Lyra 使用说明</title><style>%s</style></head>"
-                "<body><div class=wrap>%s</div></body></html>") % (_HELP_CSS, _md_to_html(md))
         body = page.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")

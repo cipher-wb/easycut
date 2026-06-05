@@ -25,6 +25,10 @@ if (-not (Test-Path $ff) -or -not (Test-Path $fp)) {
 }
 Copy-Item $ff, $fp -Destination "dist\Lyra" -Force
 
+Write-Host "[2.5/3] generate user guide (help html) ..." -ForegroundColor Cyan
+py -3 packaging\gen_help.py
+if ($LASTEXITCODE -ne 0) { throw "gen_help.py failed (exit $LASTEXITCODE)" }
+
 Write-Host "[3/3] compile installer (Inno Setup) ..." -ForegroundColor Cyan
 $iscc = Get-ChildItem "$env:LOCALAPPDATA\Programs\Inno Setup*\ISCC.exe", `
                       "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe", `
