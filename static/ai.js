@@ -145,6 +145,23 @@
     return o;
   }
 
+  // 文字防叠：同一文字轨不允许时间重叠。下面两个工具给 add_text 自动选/建不冲突的文字轨。
+  function _textTrackBusy(trackId, s, e) {
+    var t = (App.getProject().tracks || []).filter(function (x) { return x.id === trackId; })[0];
+    if (!t || t.kind !== 'text') return false;
+    return (t.clips || []).some(function (cl) {
+      var cs = +cl.start || 0, ce = cs + (+cl.duration || 0);
+      return s < ce - 1e-3 && cs < e - 1e-3;   // 区间相交
+    });
+  }
+  function _freeTextTrack(s, e) {
+    var ts = App.getProject().tracks || [];
+    for (var i = 0; i < ts.length; i++) {
+      if (ts[i].kind === 'text' && !_textTrackBusy(ts[i].id, s, e)) return ts[i].id;
+    }
+    return null;
+  }
+
   var OPS = {
     add_clip: {
       confirm: false,
@@ -290,7 +307,13 @@
         if (c.during != null) { var loc = resolveClipRef(c.during), sp = loc && clipSpan(loc.clipId); if (sp) { start = sp.tStart; dur = Math.max(0.5, sp.tEnd - sp.tStart); } }
         else if (c.start != null) start = +c.start;
         else start = App.getPlayhead ? App.getPlayhead() : 0;
+        // 防叠：为这条文字挑一条在 [start, end] 时间段空闲的文字轨；都被占了就智能新建一条
+        // 文字轨——这样多个标记上的文字会自动分散到多条轨道，不会在同一轨上堆叠。
+        var end = start + dur;
         var trackId = c.track ? resolveTrackId(c.track, 'text') : null;
+        if (trackId && _textTrackBusy(trackId, start, end)) trackId = null;          // 指定轨已占→避让
+        if (!trackId) trackId = _freeTextTrack(start, end);                          // 现有空闲文字轨
+        if (!trackId) trackId = App.addTrack('text', undefined, { noHistory: nh });  // 都占→新建一条
         var id = App.addTextClip(trackId, start, { noHistory: nh });
         if (!id) return '✗ 无法添加文字';
         lastClipId = id; var l = App.locateClip(id), tid = l.track.id;
@@ -445,7 +468,7 @@
 '5.1 close_gap 删除空隙（把后续片段左移补缝，仅本轨）。clip(删除该片段前的空隙) 或 track + at(秒)。例：「删掉 风景 前面的空白」=> [{"op":"close_gap","clip":"风景"}]。',
 '6. set_transform 画中画缩放/位置。clip | scale | cx | cy | opacity(均0~1，cx/cy为中心点比例)。',
 '7. delete_clip 删除片段。clip | ripple(true=波纹删除并补缝)。【需用户确认】',
-'8. add_text 加文字/字幕。content(必填) | during(片段引用，则文字覆盖该片段时间段) 或 start+duration(秒) | position("top-left"/"top-center"/"top-right"/"center"/"bottom-left"/"bottom-center"/"bottom-right") 或 xPct/yPct(0~1) | align | color(#RRGGBB) | fontSizePct(0~0.5) | track(可选)。',
+'8. add_text 加文字/字幕。content(必填) | during(片段引用，则文字覆盖该片段时间段) 或 start+duration(秒) | position("top-left"/"top-center"/"top-right"/"center"/"bottom-left"/"bottom-center"/"bottom-right") 或 xPct/yPct(0~1) | align | color(#RRGGBB) | fontSizePct(0~0.5) | track(可选)。注意：同一文字轨上的文字**不能时间重叠**；多条会时间重叠的文字（如在多个标记处各加一段并持续若干秒）**不要都指定同一条 track**，留空即可——系统会自动把重叠的文字分散到多条文字轨，避免堆叠。',
 '9. set_text 改文字属性。clip | content/color/align/xPct/yPct/fontSizePct/start/duration 等。',
 '10. add_track 新建轨道。kind("video"/"text")。',
 '11. remove_track 删除轨道。track | kind。【需用户确认】',
