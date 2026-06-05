@@ -1809,14 +1809,18 @@ def find_free_port(host, start_port, max_tries=50):
     import socket
     port = start_port
     for _ in range(max_tries):
+        # 用「连接探测」判断占用：能连上 = 有进程在监听(真占用) → 跳过；
+        # 连不上(含 TIME_WAIT 残留套接字) = 可用 —— ThreadingHTTPServer.allow_reuse_address=1
+        # 能重绑 TIME_WAIT 端口，所以不能因 TIME_WAIT 就误判占用（否则关掉再开/测试残留会无端口可用）。
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.25)
         try:
-            s.bind((host, port))
-            s.close()
-            return port
+            s.connect((host, port))
+            s.close()                 # 连上了 → 端口正被监听，占用
+            port += 1
         except OSError:
             s.close()
-            port += 1
+            return port               # 连不上 → 可用（包括 TIME_WAIT）
     raise OSError("找不到可用端口（从 %d 起试了 %d 个）" % (start_port, max_tries))
 
 
