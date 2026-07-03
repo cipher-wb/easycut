@@ -17,8 +17,11 @@
   /* ===================================================================== *
    * 0. 常量 / 默认值（contract_v2 §1 / §6.1 / §8）
    * ===================================================================== */
-  var DEFAULT_FONT = 'C:/Windows/Fonts/msyh.ttc';
+  var DEFAULT_FONT = '/System/Library/Fonts/Hiragino Sans GB.ttc';
   var FONT_CANDIDATES = [
+    { name: '冬青黑体 / Hiragino Sans GB', path: '/System/Library/Fonts/Hiragino Sans GB.ttc' },
+    { name: '华文黑体 / STHeiti', path: '/System/Library/Fonts/STHeiti Medium.ttc' },
+    { name: '宋体 / Songti', path: '/System/Library/Fonts/Supplemental/Songti.ttc' },
     { name: '微软雅黑', path: 'C:/Windows/Fonts/msyh.ttc' },
     { name: '微软雅黑 Bold', path: 'C:/Windows/Fonts/msyhbd.ttc' },
     { name: '黑体 SimHei', path: 'C:/Windows/Fonts/simhei.ttf' },
@@ -27,10 +30,23 @@
     { name: '仿宋 SimFang', path: 'C:/Windows/Fonts/simfang.ttf' },
     { name: '等线 DengXian', path: 'C:/Windows/Fonts/Deng.ttf' }
   ];
+  var FONT_PATHS = null;       // /api/fonts 返回后才启用；null 表示未知，不主动判缺失。
+  var VIDEO_EXT_RE = /\.(mp4|mov|m4v|mkv|webm|avi)$/i;
+  var AUDIO_EXT_RE = /\.(mp3|wav|m4a|aac|flac|ogg|opus)$/i;
+  var MEDIA_EXT_RE = /\.(mp4|mov|m4v|mkv|webm|avi|mp3|wav|m4a|aac|flac|ogg|opus)$/i;
   var SNAP_PX = 8;            // 磁吸命中阈值（屏幕像素）—— timeline 用
   var HISTORY_MAX = 100;     // 撤销栈上限（contract_v2 §6.1）
 
   function MIN_CLIP() { return Math.max(1 / (project.output.fps || 30), 0.04); }
+
+  function mediaKind(media) {
+    if (!media) return 'video';
+    if (media.kind === 'audio' || media.kind === 'video') return media.kind;
+    return (media.width && media.height) ? 'video' : 'audio';
+  }
+  function isVideoMedia(media) { return mediaKind(media) === 'video'; }
+  function isAudioMedia(media) { return mediaKind(media) === 'audio'; }
+  function isSupportedMediaName(name) { return MEDIA_EXT_RE.test(name || ''); }
 
   /* ===================================================================== *
    * 1. 全局状态对象 project（== 导出请求体 body.project，contract_v2 §1）
@@ -53,7 +69,7 @@
   /* ===================================================================== *
    * 2. id 生成器（前端生成 trk_/clip_/txt_；med_/src_ 由后端生成）
    * ===================================================================== */
-  var _ids = { trk: 0, clip: 0, txt: 0, med: 0, src: 0 };
+  var _ids = { trk: 0, clip: 0, aud: 0, txt: 0, med: 0, src: 0 };
   function nextId(kind) { _ids[kind] = (_ids[kind] || 0) + 1; return kind + '_' + _ids[kind]; }
   // 导入后端 id 时同步本地计数器，避免前端再生成与后端冲突。
   function bumpIdCounter(kind, id) {
@@ -106,6 +122,23 @@
     c = ('' + c).trim();
     if (c[0] !== '#') c = '#' + c;
     return /^#[0-9a-fA-F]{6}$/.test(c) ? c.toUpperCase() : '#000000';
+  }
+  function resolveFontFile(path) {
+    path = path ? ('' + path) : '';
+    if (FONT_PATHS && path && FONT_PATHS[path]) return path;
+    if (!FONT_PATHS && path) return path;
+    return DEFAULT_FONT || path;
+  }
+  function applyFontCatalog(fonts) {
+    if (!fonts || !fonts.length) return;
+    FONT_CANDIDATES = fonts.slice();
+    FONT_PATHS = {};
+    fonts.forEach(function (f) { if (f && f.path) FONT_PATHS[f.path] = true; });
+    DEFAULT_FONT = (fonts[0] && fonts[0].path) || DEFAULT_FONT;
+    if (window.App) {
+      window.App.DEFAULT_FONT = DEFAULT_FONT;
+      window.App.FONT_CANDIDATES = FONT_CANDIDATES;
+    }
   }
 
   /* ===================================================================== *
@@ -162,8 +195,12 @@
 
   // 客户端能力：nativeImport=true 时导入「引用原文件不复制」（桌面 pywebview 窗口）。
   // 默认 false（= 复制上传，最稳）；启动时探测一次。
-  var CAPS = { nativeImport: false };
-  api.caps().then(function (c) { if (c) CAPS.nativeImport = !!c.nativeImport; }).catch(function () {});
+  var CAPS = { nativeImport: false, drawtext: null };
+  api.caps().then(function (c) {
+    if (!c) return;
+    CAPS.nativeImport = !!c.nativeImport;
+    CAPS.drawtext = (typeof c.drawtext === 'boolean') ? c.drawtext : null;
+  }).catch(function () {});
 
   /* ===================================================================== *
    * 6. toast 轻提示（emit 'toast' 也可触达；这里直接渲染）
@@ -190,7 +227,7 @@
     return {
       id: nextId('trk'),
       kind: kind,
-      name: name || (kind === 'video' ? '视频' : '文字'),
+      name: name || (kind === 'video' ? '视频' : (kind === 'audio' ? '音频' : '文字')),
       muted: false,
       volume: 1.0,
       hidden: false,
@@ -211,17 +248,18 @@
    *    getTimeline() 返回超集，兼容 contract(§3.2) 与 engine 两套形状：
    *      { totalDuration, tracks:[{trackId,kind,dur}], segmentsByTrack,
    *        videoTracks:[{track,clips:[{clip,media,tStart,tEnd}]}],
+   *        audioTracks:[{track,clips:[{clip,media,tStart,tEnd}]}],
    *        textClips:[{clip,track}], mediaById }
    * ===================================================================== */
   var timeline = {
     totalDuration: 0, tracks: [], segmentsByTrack: {},
-    videoTracks: [], textClips: [], mediaById: new Map()
+    videoTracks: [], audioTracks: [], textClips: [], mediaById: new Map()
   };
 
   function clipDur(clip, track) {
     if (clip.freeze) return clip.duration || 0;   // 定格片段：时间轴长度 = duration，独立于 in/out
     if (track.kind === 'text') return clip.duration || 0;
-    // 公式 A（speed_design.md §0.2）：视频片段时间轴长度 = (out - in) / speed。
+    // 公式 A（speed_design.md §0.2）：视频/音频片段时间轴长度 = (out - in) / speed。
     return (clip.out - clip.in) / (clip.speed || 1);
   }
 
@@ -229,20 +267,20 @@
     var mediaById = new Map();
     for (var i = 0; i < project.media.length; i++) mediaById.set(project.media[i].id, project.media[i]);
 
-    var videoTracks = [], textClips = [], total = 0;
+    var videoTracks = [], audioTracks = [], textClips = [], total = 0;
     var tracksDerived = [], segmentsByTrack = {};
 
     for (var ti = 0; ti < project.tracks.length; ti++) {
       var track = project.tracks[ti];
       var trackDur = 0;
       var segList = [];
-      if (track.kind === 'video') {
+      if (track.kind === 'video' || track.kind === 'audio') {
         var segs = [];
         for (var ci = 0; ci < track.clips.length; ci++) {
           var clip = track.clips[ci];
           var media = mediaById.get(clip.mediaId);
           if (!media) continue;
-          // 公式 A：视频段时间轴长度 = (out-in)/speed；定格段 = duration（贯穿点）。
+          // 公式 A：音视频段时间轴长度 = (out-in)/speed；定格段 = duration（贯穿点）。
           var dur = clip.freeze ? (clip.duration || 0) : (clip.out - clip.in) / (clip.speed || 1);
           if (!(dur > 0)) continue;
           var tStart = clip.start, tEnd = clip.start + dur;
@@ -253,7 +291,8 @@
           if (tEnd > trackDur) trackDur = tEnd;
         }
         segs.sort(function (a, b) { return a.tStart - b.tStart; });
-        videoTracks.push({ track: track, clips: segs });
+        if (track.kind === 'video') videoTracks.push({ track: track, clips: segs });
+        else audioTracks.push({ track: track, clips: segs });
       } else if (track.kind === 'text') {
         for (var k = 0; k < track.clips.length; k++) {
           var tc = track.clips[k];
@@ -275,6 +314,7 @@
       tracks: tracksDerived,
       segmentsByTrack: segmentsByTrack,
       videoTracks: videoTracks,
+      audioTracks: audioTracks,
       textClips: textClips,
       mediaById: mediaById
     };
@@ -418,6 +458,13 @@
     if (mediaObj.path) mediaObj.path = ('' + mediaObj.path).replace(/\\/g, '/');
     if (!mediaObj.name) mediaObj.name = (mediaObj.path || '').split('/').pop() || '素材';
     if (!mediaObj.thumbUrl) mediaObj.thumbUrl = api.thumbUrl(mediaObj.id);
+    mediaObj.kind = mediaKind(mediaObj);
+    if (mediaObj.kind === 'audio') {
+      mediaObj.width = 0;
+      mediaObj.height = 0;
+      mediaObj.fps = 0;
+      mediaObj.hasAudio = true;
+    }
     // 去重（同 id 不重复加）
     if (getMedia(mediaObj.id)) return mediaObj.id;
     project.media.push(mediaObj);
@@ -430,7 +477,7 @@
     // 若被任何 clip 引用则拒绝（contract_v2 §3.2）
     for (var i = 0; i < project.tracks.length; i++) {
       var t = project.tracks[i];
-      if (t.kind !== 'video') continue;
+      if (t.kind !== 'video' && t.kind !== 'audio') continue;
       for (var j = 0; j < t.clips.length; j++) {
         if (t.clips[j].mediaId === mediaId) { toast('该素材已被时间轴片段引用，无法移除', 'error'); return; }
       }
@@ -503,12 +550,12 @@
   }
 
   function importFiles(fileList) {
-    var files = [].slice.call(fileList || []).filter(function (f) { return /\.mp4$/i.test(f.name); });
-    if (!files.length) { toast('请拖入 mp4 文件', 'error'); return Promise.resolve([]); }
+    var files = [].slice.call(fileList || []).filter(function (f) { return isSupportedMediaName(f.name); });
+    if (!files.length) { toast('请拖入视频或音频文件（mp4/mov/mkv/avi/mp3/wav/m4a 等）', 'error'); return Promise.resolve([]); }
     return resolveMediaIds(files).then(function (idArr) {
       var ids = (idArr || []).filter(Boolean);
       hideDropOverlay();
-      if (ids.length) toast('已导入 ' + ids.length + ' 个视频到素材库' + (CAPS.nativeImport ? '（引用原文件）' : ''), 'info', 1800);
+      if (ids.length) toast('已导入 ' + ids.length + ' 个素材到素材库' + (CAPS.nativeImport ? '（引用原文件）' : ''), 'info', 1800);
       return ids;
     });
   }
@@ -520,11 +567,12 @@
   // （如 timeline 一次手势在 pointerdown 已 push），传 opts.noHistory=true 避免双压。
   function addTrack(kind, atIndex, opts) {
     opts = opts || {};
-    if (kind !== 'video' && kind !== 'text') kind = 'video';
+    if (kind !== 'video' && kind !== 'audio' && kind !== 'text') kind = 'video';
     if (!opts.noHistory) pushHistory();
     var n = 1;
     project.tracks.forEach(function (t) { if (t.kind === kind) n++; });
-    var t = makeTrack(kind, (kind === 'video' ? '视频 ' : '文字 ') + n);
+    var label = kind === 'video' ? '视频 ' : (kind === 'audio' ? '音频 ' : '文字 ');
+    var t = makeTrack(kind, label + n);
     if (atIndex == null || atIndex < 0 || atIndex > project.tracks.length) project.tracks.push(t);
     else project.tracks.splice(atIndex, 0, t);
     changed('addTrack');
@@ -585,6 +633,13 @@
     r.sort(function (a, b) { return a[0] - b[0]; });
     return r;
   }
+  function canPlaceAt(track, excludeId, start, dur) {
+    start = Math.max(0, start);
+    var end = start + dur;
+    return !occupiedRanges(track, excludeId).some(function (rg) {
+      return start < rg[1] - 1e-6 && end > rg[0] + 1e-6;
+    });
+  }
   // 把 [start, start+dur) 调整到 track 上最近的无重叠合法位置；找不到返回 null。
   function resolveOverlap(track, excludeId, start, dur) {
     start = Math.max(0, start);
@@ -604,13 +659,42 @@
     return null;
   }
 
+  function trackKindName(kind) {
+    return kind === 'text' ? '文字' : (kind === 'audio' ? '音频' : '视频');
+  }
+  function newClipIdForTrack(track) {
+    if (track.kind === 'text') return nextId('txt');
+    if (track.kind === 'audio') return nextId('aud');
+    return nextId('clip');
+  }
+  function nextTrackNo(kind) {
+    var n = 1;
+    project.tracks.forEach(function (t) { if (t.kind === kind) n++; });
+    return n;
+  }
+  function getOrCreateAudioTrackFor(videoTrack, start, dur) {
+    var videoIdx = trackIndex(videoTrack.id);
+    if (videoIdx > 0) {
+      var below = project.tracks[videoIdx - 1];
+      if (below && below.kind === 'audio' && !below.locked &&
+          canPlaceAt(below, null, start, dur)) {
+        return below;
+      }
+    }
+    var track = makeTrack('audio', '音频 ' + nextTrackNo('audio'));
+    project.tracks.splice(Math.max(0, videoIdx), 0, track); // 数组中位于视频轨下方；视觉上显示在视频轨下一行。
+    return track;
+  }
+
   /* ===================================================================== *
    * 14. 视频片段 mutator（contract_v2 §3.2 视频片段）
    * ===================================================================== */
-  // 从素材库拖入生成 video-clip。opts: {in,out,scale,cx,cy,opacity,noSnap,noHistory}
+  // 从素材库拖入生成 video-clip；若素材有声，自动在下方音频轨生成独立 audio-clip。
+  // opts: {in,out,scale,cx,cy,opacity,noSnap,noHistory,noAudio}
   function addClipFromMedia(mediaId, trackId, startSec, opts) {
     opts = opts || {};
     var media = getMedia(mediaId); if (!media) { toast('素材不存在', 'error'); return null; }
+    if (!isVideoMedia(media)) { toast('音频素材请拖到音频轨', 'error'); return null; }
     var track = getTrack(trackId);
     if (!track || track.kind !== 'video') { toast('请拖到视频轨', 'error'); return null; }
     if (track.locked) { toast('该轨道已锁定', 'error'); return null; }
@@ -637,14 +721,64 @@
     };
     if (!opts.noHistory) pushHistory();
     track.clips.push(clip);
+    if (media.hasAudio && !opts.noAudio) {
+      var audioTrack = getOrCreateAudioTrackFor(track, placed, dur);
+      var audioPlaced = placed;
+      if (!canPlaceAt(audioTrack, null, placed, dur)) {
+        audioTrack = makeTrack('audio', '音频 ' + nextTrackNo('audio'));
+        project.tracks.splice(Math.max(0, trackIndex(track.id)), 0, audioTrack);
+      }
+      audioTrack.clips.push({
+        id: nextId('aud'),
+        mediaId: mediaId,
+        in: inS, out: outS, start: audioPlaced,
+        speed: clip.speed,
+        sourceVideoClipId: clip.id
+      });
+    }
     changed('addClip');
     bus.emit('clips:changed', { trackId: trackId });
+    bus.emit('tracks:changed', {});
+    return clip.id;
+  }
+
+  // 从素材库拖入生成 audio-clip；支持纯音频素材，也支持把带声视频只取声音放到音频轨。
+  // opts: {in,out,speed,noHistory}
+  function addAudioClipFromMedia(mediaId, trackId, startSec, opts) {
+    opts = opts || {};
+    var media = getMedia(mediaId); if (!media) { toast('素材不存在', 'error'); return null; }
+    if (!media.hasAudio && !isAudioMedia(media)) { toast('该素材没有可用音频', 'error'); return null; }
+    var track = getTrack(trackId);
+    if (!track || track.kind !== 'audio') { toast('请拖到音频轨', 'error'); return null; }
+    if (track.locked) { toast('该轨道已锁定', 'error'); return null; }
+
+    var inS = clamp(num(opts.in, 0), 0, media.duration);
+    var outS = clamp(num(opts.out, media.duration), inS + MIN_CLIP(), media.duration);
+    if (!(outS > inS)) { toast('片段时长过短', 'error'); return null; }
+    var speed = clamp(num(opts.speed, 1), 0.25, 4);
+    var dur = (outS - inS) / speed;
+
+    var start = Math.max(0, num(startSec, 0));
+    var placed = resolveOverlap(track, null, start, dur);
+    if (placed == null) { toast('该音频轨没有足够空位放置片段', 'error'); return null; }
+
+    var clip = {
+      id: nextId('aud'),
+      mediaId: mediaId,
+      in: inS, out: outS, start: placed,
+      speed: speed
+    };
+    if (!opts.noHistory) pushHistory();
+    track.clips.push(clip);
+    changed('addAudioClip');
+    bus.emit('clips:changed', { trackId: trackId });
+    bus.emit('tracks:changed', {});
     return clip.id;
   }
 
   /* 复制 / 粘贴 / 副本（剪映 Ctrl+C / Ctrl+V / Ctrl+D 与时间轴工具条「复制」）。 */
-  var clipboard = null; // { kind:'video'|'text', clip:<深拷贝> }
-  function _newClipId(track) { return (track.kind === 'video') ? nextId('clip') : nextId('txt'); }
+  var clipboard = null; // { kind:'video'|'audio'|'text', clip:<深拷贝> }
+  function _newClipId(track) { return newClipIdForTrack(track); }
   function _insertClipInto(track, clipObj, startSec) {
     var dur = clipDur(clipObj, track);
     var placed = resolveOverlap(track, null, Math.max(0, startSec), dur);
@@ -680,7 +814,7 @@
     var target = null, i, tk;
     if (selection && selection.trackId) { var t = getTrack(selection.trackId); if (t && t.kind === clipboard.kind && !t.locked) target = t; }
     if (!target) { for (i = 0; i < project.tracks.length; i++) { tk = project.tracks[i]; if (tk.kind === clipboard.kind && !tk.locked) { target = tk; break; } } }
-    if (!target) { toast('没有可粘贴的' + (clipboard.kind === 'text' ? '文字' : '视频') + '轨', 'error'); return null; }
+    if (!target) { toast('没有可粘贴的' + trackKindName(clipboard.kind) + '轨', 'error'); return null; }
     pushHistory();
     var copy = JSON.parse(JSON.stringify(clipboard.clip)); copy.id = _newClipId(target);
     var id = _insertClipInto(target, copy, Math.max(0, num(atSec, getPlayhead())));
@@ -702,7 +836,7 @@
 
     if (!opts || !opts.noHistory) pushHistory();
     var idx = track.clips.indexOf(clip);
-    var rightId = (track.kind === 'video') ? nextId('clip') : nextId('txt');
+    var rightId = newClipIdForTrack(track);
     var right;
     if (clip.freeze) {
       // 定格段切两半：同一源帧，时长按切点分配
@@ -712,15 +846,19 @@
         scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity
       };
       clip.duration = leftLen;
-    } else if (track.kind === 'video') {
+    } else if (track.kind === 'video' || track.kind === 'audio') {
       // 公式 4（speed_design.md §0.4）：leftLen 已是时间轴长度（clipDur 含 speed），
       // 源切点 srcCut = in + leftLen*speed；左右两段沿用同一 speed，时间轴长度自然相加 = 原长。
       var srcCut = clip.in + leftLen * (clip.speed || 1);
       right = {
         id: rightId, mediaId: clip.mediaId, in: srcCut, out: clip.out, start: atSec,
-        scale: clip.scale, cx: clip.cx, cy: clip.cy, opacity: clip.opacity,
         speed: (clip.speed == null ? 1 : clip.speed)
       };
+      if (track.kind === 'video') {
+        right.scale = clip.scale; right.cx = clip.cx; right.cy = clip.cy; right.opacity = clip.opacity;
+      } else if (track.kind === 'audio' && clip.sourceVideoClipId) {
+        right.sourceVideoClipId = clip.sourceVideoClipId;
+      }
       clip.out = srcCut; // 左段保留原 id 与原 speed
     } else {
       right = JSON.parse(JSON.stringify(clip));
@@ -931,7 +1069,7 @@
     var clip = getClipIn(trackId, clipId); if (!clip) return;
     var MIN = MIN_CLIP();
     // 定格片段虽在视频轨，但拖边缘改的是 start/duration（与文字片段同构），不裁源 in/out。
-    var textLike = (track.kind !== 'video') || clip.freeze;
+    var textLike = (track.kind === 'text') || clip.freeze;
     var media = (!textLike) ? getMedia(clip.mediaId) : null;
 
     if (!opts.noHistory) pushHistory();
@@ -1009,13 +1147,13 @@
   }
   function getClip(trackId, clipId) { return getClipIn(trackId, clipId); }
 
-  // 变速倍率 mutator（speed_design.md §0.1）。仅对 video 轨片段生效；text 轨忽略。
+  // 变速倍率 mutator（speed_design.md §0.1）。对 video/audio 轨片段生效；text 轨忽略。
   // speed 钳制到 [0.25,4]，缺省 1；opts.noHistory:true 时不压栈（连续手势合并，由调用方负责 pushHistory）。
   // 改 speed 改变时间轴长度/总时长 → 必须 emit 'clips:changed'（而非 transform:changed），
   // 让 player 重建派生 + 重对齐源时间。
   function setClipSpeed(trackId, clipId, speed, opts) {
     opts = opts || {};
-    var track = getTrack(trackId); if (!track || track.kind !== 'video') return;
+    var track = getTrack(trackId); if (!track || (track.kind !== 'video' && track.kind !== 'audio')) return;
     var clip = getClipIn(trackId, clipId); if (!clip) return;
     var v = clamp(num(speed, 1), 0.25, 4);
     if (!opts.noHistory) pushHistory();
@@ -1232,8 +1370,11 @@
   }
   function maybeInitOutputFromFirstMedia(force) {
     if (_outputUserTouched && !force) return;
-    if (!project.media.length) return;
-    var m = project.media[0];
+    var m = null;
+    for (var i = 0; i < project.media.length; i++) {
+      if (isVideoMedia(project.media[i])) { m = project.media[i]; break; }
+    }
+    if (!m) return;
     project.output.width = toEven(m.width || 1920);
     project.output.height = toEven(m.height || 1080);
     project.output.fps = clamp(Math.round(m.fps || 30), 1, 120);
@@ -1306,7 +1447,7 @@
     content = (content == null ? '' : '' + content);
     if (!content || !(maxWidthPx > 0) || !(fontPx > 0)) return content;
     var ctx = _wrapCtx();
-    ctx.font = Math.round(fontPx) + 'px "Microsoft YaHei","微软雅黑",sans-serif';
+    ctx.font = Math.round(fontPx) + 'px "PingFang SC","Hiragino Sans GB","Microsoft YaHei","微软雅黑",sans-serif';
     function w(s) { return ctx.measureText(s).width; }
     var out = [];
     content.split('\n').forEach(function (para) {
@@ -1364,6 +1505,17 @@
           c.speed = clamp(num(c.speed, 1), 0.25, 4);      // 变速倍率（缺省 1，深拷贝已带，仅 clamp）
           return c.out > c.in;                            // B2
         });
+      } else if (t.kind === 'audio') {
+        t.muted = !!t.muted; t.volume = clamp01(t.volume); t.hidden = !!t.hidden; t.locked = !!t.locked;
+        t.clips = t.clips.filter(function (c) {
+          var m = mediaById[c.mediaId];
+          if (!m || !m.hasAudio) return false;
+          c.in = Math.max(0, num(c.in, 0));
+          c.out = Math.min(num(c.out, m.duration), m.duration);
+          c.start = Math.max(0, num(c.start, 0));
+          c.speed = clamp(num(c.speed, 1), 0.25, 4);
+          return c.out > c.in;
+        });
       } else { // text
         t.hidden = !!t.hidden; t.locked = !!t.locked;
         t.clips = t.clips.filter(function (c) {
@@ -1373,6 +1525,7 @@
           c.yPct = clamp01(num(c.yPct, 0.1));
           c.wPct = clamp(num(c.wPct, 0.5), 0.02, 1.2);
           if (c.hPct != null) c.hPct = clamp(num(c.hPct, 0.16), 0.02, 1.2);  // 可选；缺省=自动高
+          c.fontFile = resolveFontFile(c.fontFile);
           c.fontSizePct = clamp(num(c.fontSizePct, 0.06), 0.01, 0.5);
           c.opacity = clamp01(num(c.opacity, 1));
           c.boxOpacity = clamp01(num(c.boxOpacity, 0.5));
@@ -1435,7 +1588,7 @@
       var info = null;
       try { info = App.timeline.trackDropInfo(clientX, clientY); } catch (_) { info = null; }
       if (info && info.trackId != null) {
-        return { zone: 'track', trackId: info.trackId, timeSec: Math.max(0, num(info.timeSec, 0)) };
+        return { zone: 'track', trackId: info.trackId, kind: info.kind || (getTrack(info.trackId) || {}).kind, timeSec: Math.max(0, num(info.timeSec, 0)) };
       }
     }
     var mp = document.getElementById('mediaPanel');
@@ -1453,19 +1606,35 @@
     if (z.zone === 'track') {
       try { if (App.timeline && typeof App.timeline.setDropTargetTrack === 'function') App.timeline.setDropTargetTrack(z.trackId); } catch (_) {}
       if (mp) mp.classList.remove('drop-active');
-      setDropOverlayText('松开：导入并添加到此轨道', '将作为片段添加到该视频轨的指针位置');
+      var tr = getTrack(z.trackId);
+      if (tr && tr.kind === 'audio') setDropOverlayText('松开：导入并添加到音频轨', 'mp3/wav/m4a 或带声视频会作为声音片段添加到指针位置');
+      else setDropOverlayText('松开：导入并添加到视频轨', '视频会作为画面片段添加到指针位置，带声音时自动生成音频片段');
     } else { // media / other 都按导入素材库处理
       try { if (App.timeline && typeof App.timeline.setDropTargetTrack === 'function') App.timeline.setDropTargetTrack(null); } catch (_) {}
       if (mp) mp.classList.add('drop-active');
-      setDropOverlayText('松开：导入到素材库', '支持 mp4 文件，导入后进入素材库');
+      setDropOverlayText('松开：导入到素材库', '支持 mp4 / mov / mkv / avi / mp3 / wav / m4a 等，导入后进入素材库');
     }
   }
 
-  // 仅取 mp4 文件（与 importFiles 过滤一致）。
-  function pickMp4(fileList) {
-    return [].slice.call(fileList || []).filter(function (f) { return /\.mp4$/i.test(f.name); });
+  // 仅取支持的媒体文件（与 importFiles 过滤一致）。
+  function pickMediaFiles(fileList) {
+    return [].slice.call(fileList || []).filter(function (f) { return isSupportedMediaName(f.name); });
   }
-  // drop 到某视频轨：每个文件先 importViaUpload 入库，再 addClipFromMedia 到该轨；
+  function addImportedMediaToTrack(mediaId, trackId, startSec) {
+    var track = getTrack(trackId);
+    var media = getMedia(mediaId);
+    if (!track || !media) return null;
+    if (track.kind === 'video') {
+      if (!isVideoMedia(media)) { toast('音频文件已导入素材库，请拖到音频轨使用', 'error'); return null; }
+      return App.addClipFromMedia(mediaId, trackId, startSec);
+    }
+    if (track.kind === 'audio') {
+      if (!media.hasAudio && !isAudioMedia(media)) { toast('该素材没有可用音频', 'error'); return null; }
+      return App.addAudioClipFromMedia(mediaId, trackId, startSec);
+    }
+    return null;
+  }
+  // drop 到某音视频轨：每个文件先入库，再按轨道类型创建视频/音频片段；
   // 多文件依次排开——第二个起的 start 接续上一片段末尾（用 addClipFromMedia 返回的片段实际落点 + 时长推算）。
   function importToTrack(files, trackId, startSec) {
     var nextStart = Math.max(0, num(startSec, 0));
@@ -1473,7 +1642,7 @@
       var added = 0;
       (idArr || []).forEach(function (mediaId) {
         if (!mediaId) return;
-        var clipId = App.addClipFromMedia(mediaId, trackId, nextStart);
+        var clipId = addImportedMediaToTrack(mediaId, trackId, nextStart);
         if (clipId) {
           added++;
           // 推进下一个 start：用刚加片段的实际落点 + 其时间轴长度（含变速），紧贴排列。
@@ -1505,9 +1674,11 @@
       e.preventDefault(); depth = 0;
       var z = dropZoneAt(e.clientX, e.clientY);
       clearDropHighlights();
-      var files = pickMp4(e.dataTransfer.files);
-      if (!files.length) { toast('请拖入 mp4 文件', 'error'); return; }
-      if (z.zone === 'track' && getTrack(z.trackId) && getTrack(z.trackId).kind === 'video' && !getTrack(z.trackId).locked) {
+      var files = pickMediaFiles(e.dataTransfer.files);
+      if (!files.length) { toast('请拖入视频或音频文件（mp4/mov/mkv/avi/mp3/wav/m4a 等）', 'error'); return; }
+      if (z.zone === 'track' && getTrack(z.trackId) &&
+          (getTrack(z.trackId).kind === 'video' || getTrack(z.trackId).kind === 'audio') &&
+          !getTrack(z.trackId).locked) {
         setDropOverlayText('上传中 …', '');
         importToTrack(files, z.trackId, z.timeSec);
       } else {
@@ -1531,18 +1702,26 @@
     if (!project.media.length) { if (hint) hint.style.display = ''; return; }
     if (hint) hint.style.display = 'none';
     project.media.forEach(function (m) {
+      var isAudio = isAudioMedia(m);
       var item = document.createElement('div');
-      item.className = 'media-item' + (m.offline ? ' offline' : '');
+      item.className = 'media-item' + (isAudio ? ' audio-media' : '') + (m.offline ? ' offline' : '');
       item.dataset.mediaId = m.id;
       item.draggable = true;
 
-      var img = document.createElement('img');
-      img.className = 'mi-thumb';
-      // 离线素材缩略图已失效，不请求（避免 404）；显示占位。
-      if (!m.offline) img.src = m.thumbUrl || api.thumbUrl(m.id);
-      img.alt = m.name || '';
-      img.draggable = false;
-      item.appendChild(img);
+      if (isAudio) {
+        var audioThumb = document.createElement('div');
+        audioThumb.className = 'mi-thumb mi-audio-thumb';
+        audioThumb.textContent = '♪';
+        item.appendChild(audioThumb);
+      } else {
+        var img = document.createElement('img');
+        img.className = 'mi-thumb';
+        // 离线素材缩略图已失效，不请求（避免 404）；显示占位。
+        if (!m.offline) img.src = m.thumbUrl || api.thumbUrl(m.id);
+        img.alt = m.name || '';
+        img.draggable = false;
+        item.appendChild(img);
+      }
 
       if (m.offline) {
         var ob = document.createElement('span');
@@ -1558,11 +1737,13 @@
       info.appendChild(nameEl);
       var meta = document.createElement('div');
       meta.className = 'mi-meta';
-      meta.textContent = fmtShort(m.duration) + ' · ' + (m.width || '?') + '×' + (m.height || '?') + ' · ' + Math.round(m.fps || 0) + 'fps';
+      meta.textContent = isAudio
+        ? (fmtShort(m.duration) + ' · 音频')
+        : (fmtShort(m.duration) + ' · ' + (m.width || '?') + '×' + (m.height || '?') + ' · ' + Math.round(m.fps || 0) + 'fps');
       info.appendChild(meta);
       var badge = document.createElement('span');
-      badge.className = 'mi-badge-audio';
-      badge.textContent = m.hasAudio ? '有声' : '无声';
+      badge.className = 'mi-badge-audio' + (isAudio ? ' has' : (m.hasAudio ? ' has' : ' no'));
+      badge.textContent = isAudio ? '音频' : (m.hasAudio ? '有声' : '无声');
       info.appendChild(badge);
       item.appendChild(info);
 
@@ -1582,10 +1763,13 @@
 
       // 拖到时间轴（timeline_v2 §7 约定的 dataTransfer key）
       item.addEventListener('dragstart', function (ev) {
+        window.__LYRA_DRAG_MEDIA_ID = m.id;
         ev.dataTransfer.setData('application/x-mediaid', m.id);
+        ev.dataTransfer.setData('application/x-media-kind', mediaKind(m));
         ev.dataTransfer.setData('text/plain', m.id);
         ev.dataTransfer.effectAllowed = 'copy';
       });
+      item.addEventListener('dragend', function () { window.__LYRA_DRAG_MEDIA_ID = ''; });
       list.appendChild(item);
     });
   }
@@ -1611,6 +1795,7 @@
       clipSec: $('propClipSection'), textSec: $('propTextSection'),
       trackSec: $('propTrackSection'), outSec: $('propOutputSection'),
       // clip
+      clipTitle: $('propClipTitle'),
       rngScale: $('rngClipScale'), numScale: $('numClipScale'),
       numCx: $('numClipCx'), numCy: $('numClipCy'), rngOpacity: $('rngClipOpacity'),
       rngSpeed: $('rngSpeed'), numSpeed: $('propSpeed'),
@@ -1808,6 +1993,11 @@
   }
 
   function showSec(el, on) { if (el) { el.hidden = !on; el.style.display = on ? '' : 'none'; } }
+  function showControl(el, on) {
+    if (!el) return;
+    var box = el.closest('.field') || el.closest('.row') || el.parentElement;
+    showSec(box, on);
+  }
   function renderPropPanel() {
     var c = curClip(), tc = curTextClip(), tk = curTrack();
     showSec(P.empty, !(c || tc || tk));
@@ -1819,11 +2009,20 @@
     if (tk) fillTrackPanel(tk);
   }
   function fillClipPanel(c) {
-    if (P.rngScale) P.rngScale.value = c.scale;
-    if (P.numScale) P.numScale.value = Math.round(c.scale * 100);
-    if (P.numCx) P.numCx.value = (+c.cx).toFixed(3);
-    if (P.numCy) P.numCy.value = (+c.cy).toFixed(3);
-    if (P.rngOpacity) P.rngOpacity.value = c.opacity;
+    var track = getTrack(selection.trackId);
+    var isAudio = track && track.kind === 'audio';
+    if (P.clipTitle) P.clipTitle.textContent = isAudio ? '音频片段' : '视频片段（画中画）';
+    showControl(P.rngScale, !isAudio);
+    showControl(P.numCx, !isAudio);
+    showControl(P.rngOpacity, !isAudio);
+    showSec(P.btnContain && P.btnContain.closest('.btn-row'), !isAudio);
+    if (!isAudio) {
+      if (P.rngScale) P.rngScale.value = c.scale;
+      if (P.numScale) P.numScale.value = Math.round(c.scale * 100);
+      if (P.numCx) P.numCx.value = (+c.cx).toFixed(3);
+      if (P.numCy) P.numCy.value = (+c.cy).toFixed(3);
+      if (P.rngOpacity) P.rngOpacity.value = c.opacity;
+    }
     // 定格片段：显示「时长 + 源帧时刻」，隐藏「倍率 / 裁剪 in-out」（其余画中画变换照常）
     var isFreeze = !!c.freeze;
     showSec(P.fsFreeze, isFreeze);
@@ -1840,7 +2039,7 @@
       if (P.numOut) P.numOut.value = (+c.out).toFixed(2);
       if (P.numStart) P.numStart.value = (+c.start).toFixed(2);
     }
-    var t = getTrack(selection.trackId);
+    var t = track;
     if (t) { if (P.chkTrackMuted) P.chkTrackMuted.checked = !!t.muted; if (P.rngTrackVolume) P.rngTrackVolume.value = t.volume == null ? 1 : t.volume; }
   }
   function fillTextPanel(c) {
@@ -1850,7 +2049,7 @@
     if (P.color) P.color.value = normHex(c.color);
     if (P.opacityT) P.opacityT.value = c.opacity;
     if (P.align) P.align.value = c.align || 'left';
-    if (P.font) P.font.value = c.fontFile || DEFAULT_FONT;
+    if (P.font) P.font.value = resolveFontFile(c.fontFile || DEFAULT_FONT);
     if (P.border) P.border.checked = !!c.border;
     if (P.borderColor) P.borderColor.value = normHex(c.borderColor);
     if (P.borderW) P.borderW.value = c.borderWPct;
@@ -1864,9 +2063,9 @@
     if (P.trackName) P.trackName.value = t.name || '';
     if (P.trackHidden) P.trackHidden.checked = !!t.hidden;
     if (P.trackLocked) P.trackLocked.checked = !!t.locked;
-    var isVideo = t.kind === 'video';
-    if (P.trackMuted2) { P.trackMuted2.checked = !!t.muted; P.trackMuted2.parentElement && (P.trackMuted2.parentElement.style.display = isVideo ? '' : 'none'); }
-    if (P.trackVolume2) { P.trackVolume2.value = t.volume == null ? 1 : t.volume; P.trackVolume2.parentElement && (P.trackVolume2.parentElement.style.display = isVideo ? '' : 'none'); }
+    var hasAudioControls = t.kind === 'video' || t.kind === 'audio';
+    if (P.trackMuted2) { P.trackMuted2.checked = !!t.muted; P.trackMuted2.parentElement && (P.trackMuted2.parentElement.style.display = hasAudioControls ? '' : 'none'); }
+    if (P.trackVolume2) { P.trackVolume2.value = t.volume == null ? 1 : t.volume; P.trackVolume2.parentElement && (P.trackVolume2.parentElement.style.display = hasAudioControls ? '' : 'none'); }
   }
 
   /* ===================================================================== *
@@ -1921,8 +2120,9 @@
     api.fonts().then(function (res) {
       var fonts = res && res.fonts;
       if (fonts && fonts.length) {
+        applyFontCatalog(fonts);
         populateFontSelect(sel, fonts);
-        var c = curTextClip(); if (c) sel.value = c.fontFile;
+        var c = curTextClip(); if (c) sel.value = resolveFontFile(c.fontFile);
       }
     }).catch(function () {});
   }
@@ -2112,6 +2312,7 @@
     var media = project.media.map(function (m) {
       return {
         id: m.id,
+        kind: mediaKind(m),
         path: m.path,
         name: m.name,
         width: m.width,
@@ -2128,14 +2329,14 @@
     return { output: out, media: media, tracks: tracks, comments: comments, markers: markers };
   }
 
-  // 把某 media 的越界视频 clips clamp 到 [0, newDuration]；丢弃整段越界(out<=in 或 in>=dur)。
+  // 把某 media 的越界音视频 clips clamp 到 [0, newDuration]；丢弃整段越界(out<=in 或 in>=dur)。
   // 返回 {clamped, dropped} 计数（调用方据此 toast）。
   function _clampClipsForMedia(mediaId, newDuration) {
     var clamped = 0, dropped = 0;
     if (!(newDuration > 0)) newDuration = 0;
     for (var ti = 0; ti < project.tracks.length; ti++) {
       var t = project.tracks[ti];
-      if (t.kind !== 'video') continue;
+      if (t.kind !== 'video' && t.kind !== 'audio') continue;
       var kept = [];
       for (var ci = 0; ci < t.clips.length; ci++) {
         var c = t.clips[ci];
@@ -2168,6 +2369,7 @@
     project.media.length = 0;
     lmedia.forEach(function (m) {
       if (m && m.path) m.path = ('' + m.path).replace(/\\/g, '/');
+      if (m) m.kind = mediaKind(m);
       project.media.push(m);
     });
     project.tracks.length = 0;
@@ -2197,6 +2399,7 @@
           if (s.duration != null) m.duration = s.duration;
           if (s.fps != null) m.fps = s.fps;
           if (s.hasAudio != null) m.hasAudio = s.hasAudio;
+          if (s.kind) m.kind = s.kind;
           if (s.path) m.path = ('' + s.path).replace(/\\/g, '/');
           // changed 且新时长变短 → clamp 越界片段。
           if (s.changed && s.duration != null) {
@@ -2209,6 +2412,7 @@
         m.offline = true;
         m.streamId = null;
       }
+      m.kind = mediaKind(m);
       m.thumbUrl = api.thumbUrl(m.id);  // 按 mediaId 重建（streamId 失效不影响缩略图按 mediaId 现取）。
     });
 
@@ -2217,7 +2421,9 @@
     project.tracks.forEach(function (t) {
       bumpIdCounter('trk', t.id);
       (t.clips || []).forEach(function (c) {
-        if (t.kind === 'text') bumpIdCounter('txt', c.id); else bumpIdCounter('clip', c.id);
+        if (t.kind === 'text') bumpIdCounter('txt', c.id);
+        else if (t.kind === 'audio') bumpIdCounter('aud', c.id);
+        else bumpIdCounter('clip', c.id);
       });
     });
 
@@ -2289,11 +2495,13 @@
         if (!r.online) { toast('重新链接失败：' + (r.error || '无法解析该文件'), 'error', 4000); return; }
         media.path = ('' + path).replace(/\\/g, '/');
         media.streamId = r.streamId || null;
+        if (r.kind) media.kind = r.kind;
         if (r.width != null) media.width = r.width;
         if (r.height != null) media.height = r.height;
         if (r.fps != null) media.fps = r.fps;
         if (r.hasAudio != null) media.hasAudio = r.hasAudio;
         media.offline = false;
+        media.kind = mediaKind(media);
         media.thumbUrl = api.thumbUrl(mediaId);
         var msg = '已重新链接：' + (media.name || mediaId);
         if (r.duration != null) {
@@ -2336,6 +2544,7 @@
     project: project,
     bus: bus,
     api: api,
+    CAPS: CAPS,
     getProject: getProject,
     getTimeline: getTimeline,
     rebuildTimeline: rebuildTimeline,
@@ -2347,6 +2556,7 @@
 
     // 素材库 / 导入
     addMedia: addMedia, removeMedia: removeMedia, getMedia: getMedia,
+    mediaKind: mediaKind, isVideoMedia: isVideoMedia, isAudioMedia: isAudioMedia,
     importViaPicker: importViaPicker, importViaUpload: importViaUpload, importFiles: importFiles,
 
     // 轨道
@@ -2354,7 +2564,8 @@
     moveTrack: moveTrack, getTrack: getTrack,
 
     // 视频片段
-    addClipFromMedia: addClipFromMedia, splitClip: splitClip, removeClip: removeClip,
+    addClipFromMedia: addClipFromMedia, addAudioClipFromMedia: addAudioClipFromMedia,
+    splitClip: splitClip, removeClip: removeClip,
     rippleRemoveClip: rippleRemoveClip, moveClip: moveClip, trimClip: trimClip, closeGap: closeGap,
     getComments: getComments, getComment: getComment, addComment: addComment,
     updateComment: updateComment, removeComment: removeComment, setCommentStatus: setCommentStatus,
@@ -2459,14 +2670,56 @@
     if (rz && tp) {
       function setH(h) {
         h = Math.max(140, Math.min(Math.round(window.innerHeight * 0.85), h));
-        tp.style.flex = '0 1 ' + h + 'px'; tp.style.height = h + 'px';   // 0 1：偏好 h，但窗口矮时可压缩
+        tp.style.flex = '0 0 ' + h + 'px'; tp.style.height = h + 'px';
+        rz.setAttribute('aria-valuenow', String(Math.round(h)));
         try { localStorage.setItem('qj-h-timeline', String(Math.round(h))); } catch (e) {}
       }
       var savedH = parseInt(localStorage.getItem('qj-h-timeline') || '', 10); if (isFinite(savedH)) setH(savedH);
-      var on = false, sy = 0, sh = 0;
-      rz.addEventListener('mousedown', function (e) { on = true; sy = e.clientY; sh = tp.getBoundingClientRect().height; rz.classList.add('dragging'); document.body.style.cursor = 'ns-resize'; e.preventDefault(); });
-      window.addEventListener('mousemove', function (e) { if (on) setH(sh + (sy - e.clientY)); });
-      window.addEventListener('mouseup', function () { if (!on) return; on = false; rz.classList.remove('dragging'); document.body.style.cursor = ''; window.dispatchEvent(new Event('resize')); });
+      rz.setAttribute('role', 'separator');
+      rz.setAttribute('aria-orientation', 'horizontal');
+      rz.setAttribute('aria-label', '调整时间轴高度');
+      var on = false, sy = 0, sh = 0, pid = null, prevSelect = '';
+      function startDrag(e) {
+        if (e.button != null && e.button !== 0) return;
+        on = true; sy = e.clientY; sh = tp.getBoundingClientRect().height;
+        pid = e.pointerId != null ? e.pointerId : null;
+        prevSelect = document.body.style.userSelect || '';
+        rz.classList.add('dragging');
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        try { if (pid != null && rz.setPointerCapture) rz.setPointerCapture(pid); } catch (_) {}
+        e.preventDefault();
+      }
+      function moveDrag(e) {
+        if (!on) return;
+        if (pid != null && e.pointerId != null && e.pointerId !== pid) return;
+        setH(sh + (sy - e.clientY));
+        e.preventDefault();
+      }
+      function endDrag() {
+        if (!on) return;
+        try { if (pid != null && rz.releasePointerCapture) rz.releasePointerCapture(pid); } catch (_) {}
+        on = false; pid = null;
+        rz.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = prevSelect;
+        window.dispatchEvent(new Event('resize'));
+      }
+      if (window.PointerEvent) {
+        rz.addEventListener('pointerdown', startDrag);
+        rz.addEventListener('pointermove', moveDrag);
+        window.addEventListener('pointermove', moveDrag);
+        rz.addEventListener('pointerup', endDrag);
+        window.addEventListener('pointerup', endDrag);
+        rz.addEventListener('pointercancel', endDrag);
+        window.addEventListener('pointercancel', endDrag);
+        window.addEventListener('mousemove', moveDrag);
+        window.addEventListener('mouseup', endDrag);
+      } else {
+        rz.addEventListener('mousedown', startDrag);
+        window.addEventListener('mousemove', moveDrag);
+        window.addEventListener('mouseup', endDrag);
+      }
     }
   }
 

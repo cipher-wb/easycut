@@ -25,8 +25,8 @@
     </div>
     <div class="tb-sep"></div>
     <div class="tb-group">
-      <button id="btnImport" type="button" title="导入 mp4（弹出文件选择框，入素材库）">＋ 导入 mp4</button>
-      <input type="file" id="fileImport" accept="video/mp4,.mp4" multiple hidden />
+      <button id="btnImport" type="button" title="导入视频或音频（弹出文件选择框，入素材库）">＋ 导入媒体</button>
+      <input type="file" id="fileImport" accept="video/*,audio/*,.mp4,.mov,.m4v,.mkv,.webm,.avi,.mp3,.wav,.m4a,.aac,.flac,.ogg,.opus" multiple hidden />
       <button id="btnAddText" type="button" title="在当前/新文字轨于播放头添加一条文字">Ａ 添加文字</button>
     </div>
     <div class="tb-sep"></div>
@@ -55,9 +55,10 @@
     </div>
     <div class="tb-spacer"></div>
     <div class="tb-group tb-addtrack">
-      <button id="btnAddTrack" type="button" title="增加轨道（视频轨 / 文字轨）">＋ 轨道 ▾</button>
+      <button id="btnAddTrack" type="button" title="增加轨道（视频轨 / 音频轨 / 文字轨）">＋ 轨道 ▾</button>
       <div id="addTrackMenu" class="menu" hidden>
         <button type="button" class="menu-item" data-kind="video">视频轨</button>
+        <button type="button" class="menu-item" data-kind="audio">音频轨</button>
         <button type="button" class="menu-item" data-kind="text">文字轨</button>
       </div>
     </div>
@@ -91,7 +92,7 @@
     <aside id="mediaPanel">
       <div id="mediaPanelHead">
         <span class="mp-title">素材库</span>
-        <button id="btnImportMini" type="button" class="mini" title="导入 mp4">＋ 导入</button>
+        <button id="btnImportMini" type="button" class="mini" title="导入视频或音频">＋ 导入</button>
       </div>
       <div id="mediaList">
         <!-- .media-item（动态）：data-media-id；draggable=true
@@ -99,7 +100,7 @@
         <div id="mediaEmptyHint" class="media-empty">
           <div class="me-icon">🗂</div>
           <div class="me-title">素材库为空</div>
-          <div class="me-sub">拖入 mp4 文件，或点击“＋ 导入”</div>
+          <div class="me-sub">拖入视频或音频文件，或点击“＋ 导入”</div>
         </div>
       </div>
     </aside>
@@ -112,7 +113,7 @@
       <div id="stage">
         <!-- 合成画布盒：尺寸由 player 按 output 比例 letterbox 写入 -->
         <div id="canvasBox">
-          <!-- 视频层容器：每条视频轨动态生成一个 #vlayer-<trackId>（.video-layer） -->
+          <!-- 视频层容器：每条视频/音频轨动态生成一个 #vlayer-<trackId>（.video-layer）；音频轨隐藏只出声 -->
           <div id="videoLayers"></div>
           <!-- 文字 WYSIWYG + 选中变换手柄层（置于视频之上） -->
           <div id="overlayLayer">
@@ -144,7 +145,7 @@
 
       <!-- 视频片段分区 #propClipSection -->
       <div id="propClipSection" class="prop-section" hidden>
-        <h3 class="prop-h">视频片段（画中画）</h3>
+        <h3 class="prop-h" id="propClipTitle">视频片段（画中画）</h3>
 
         <!-- 定格片段专属：显示时长 + 源帧时刻（仅 freeze 片段可见） -->
         <fieldset class="group freeze-only" id="fsFreeze" hidden>
@@ -218,7 +219,7 @@
         </fieldset>
 
         <fieldset class="group">
-          <legend>所属视频轨音频</legend>
+          <legend>所属轨音频</legend>
           <label class="inline">
             <input type="checkbox" id="chkTrackMuted" /> 静音该轨
           </label>
@@ -338,9 +339,9 @@
             <input type="checkbox" id="chkTrackLocked" /> 锁定该轨
           </label>
         </div>
-        <!-- 视频轨额外音频控制 -->
+        <!-- 视频/音频轨额外音频控制 -->
         <fieldset class="group" id="propTrackAudio">
-          <legend>视频轨音频</legend>
+          <legend>轨道音频</legend>
           <label class="inline">
             <input type="checkbox" id="chkTrackMuted2" /> 静音该轨
           </label>
@@ -549,7 +550,7 @@
       <div class="ai-cfg-path">
         <span>配置文件（含你的 Key，保存在本机）：</span>
         <code id="aiCfgPath">—</code>
-        <button type="button" id="aiCfgReveal" class="mini" title="在资源管理器中打开该文件">📂 打开文件夹</button>
+        <button type="button" id="aiCfgReveal" class="mini" title="在 Finder / 资源管理器中打开该文件">📂 打开文件夹</button>
       </div>
       <div class="ai-cfg-actions">
         <button type="button" id="aiCfgSave" class="primary">保存</button>
@@ -563,7 +564,7 @@
     <div class="do-inner">
       <div class="do-icon">⬇</div>
       <div class="do-title">松开以导入素材</div>
-      <div class="do-sub">支持 mp4 文件，导入后进入素材库</div>
+      <div class="do-sub">支持 mp4 / mov / mkv / avi / mp3 / wav / m4a 等，导入后进入素材库</div>
     </div>
   </div>
 

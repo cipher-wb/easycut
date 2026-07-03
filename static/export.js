@@ -136,16 +136,19 @@
     var stat = countSegments(proj);
     var total = totalDuration();
 
-    var vTracks = 0, tTracks = 0;
+    var vTracks = 0, aTracks = 0, tTracks = 0;
     if (proj && proj.tracks) {
       for (var i = 0; i < proj.tracks.length; i++) {
-        if (proj.tracks[i].kind === 'text') tTracks++; else vTracks++;
+        if (proj.tracks[i].kind === 'text') tTracks++;
+        else if (proj.tracks[i].kind === 'audio') aTracks++;
+        else vTracks++;
       }
     }
 
     summaryEl.innerHTML =
-      '视频片段：' + stat.clips + ' &nbsp;|&nbsp; 文字条数：' + stat.texts +
-      ' &nbsp;|&nbsp; 轨道：视频 ' + vTracks + ' / 文字 ' + tTracks + '<br>' +
+      '视频片段：' + stat.clips + ' &nbsp;|&nbsp; 音频片段：' + stat.audios +
+      ' &nbsp;|&nbsp; 文字条数：' + stat.texts +
+      ' &nbsp;|&nbsp; 轨道：视频 ' + vTracks + ' / 音频 ' + aTracks + ' / 文字 ' + tTracks + '<br>' +
       '总时长：' + App.fmtTime(total) + '<br>' +
       '输出：' + (o.width || '?') + '×' + (o.height || '?') + ' @' + (o.fps || '?') + 'fps' +
       ' &nbsp; CRF ' + (o.crf != null ? o.crf : '?') +
@@ -169,6 +172,12 @@
     if (!proj || !hasAnyClip(proj)) {
       App.toast('时间轴为空，无法导出', 'error');
       if (textEl) textEl.textContent = '时间轴为空';
+      return;
+    }
+    if (App.CAPS && App.CAPS.drawtext === false && countSegments(proj).texts > 0) {
+      var hint = '当前 ffmpeg 不支持 drawtext，无法导出文字轨。macOS 请安装 ffmpeg-full，或换用带字体滤镜的 ffmpeg 后重启 Lyra。';
+      App.toast(hint, 'error', 7000);
+      if (textEl) textEl.textContent = 'ffmpeg 不支持文字轨导出';
       return;
     }
 
@@ -287,7 +296,7 @@
   }
 
   /* ----------------------------------------------------------------------
-   * “打开所在文件夹”：调后端在资源管理器里打开并选中文件（本机服务，各模式可用）；
+   * “打开所在文件夹”：调后端在系统文件管理器里打开并选中文件（本机服务，各模式可用）；
    * 失败再降级为复制路径到剪贴板。
    * -------------------------------------------------------------------- */
   function onOpenFolder() {
@@ -365,7 +374,7 @@
   }
 
   function countSegments(proj) {
-    var clips = 0, texts = 0;
+    var clips = 0, audios = 0, texts = 0;
     if (proj && proj.tracks) {
       for (var i = 0; i < proj.tracks.length; i++) {
         var t = proj.tracks[i];
@@ -374,13 +383,15 @@
           var c = arr[j];
           if (t.kind === 'text') {
             if ((c.duration || 0) > 0) texts++;
+          } else if (t.kind === 'audio') {
+            if (((c.out || 0) - (c.in || 0)) > 0) audios++;
           } else {
             if (((c.out || 0) - (c.in || 0)) > 0) clips++;
           }
         }
       }
     }
-    return { clips: clips, texts: texts };
+    return { clips: clips, audios: audios, texts: texts };
   }
 
   /* 建议输出名：取第一个被引用片段所属 media 名，否则第一个素材名，否则默认。 */
@@ -399,7 +410,7 @@
 
   function firstReferencedMediaName(proj) {
     if (!proj || !proj.tracks) return null;
-    // 找时间轴上最早出现的视频片段所引用的 media。
+    // 找时间轴上最早出现的音视频片段所引用的 media。
     var best = null;
     for (var i = 0; i < proj.tracks.length; i++) {
       var t = proj.tracks[i];

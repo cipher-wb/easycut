@@ -5,18 +5,18 @@
  * 遵循 _build/contract_v2.md (权威)。与 engine_v2.md 的 DOM 命名冲突处一律以
  * contract_v2.md §4.3 为准:
  *   - 画布盒        #canvasBox          (维持 output 比例, letterbox 居中)
- *   - 视频层容器    #videoLayers        (内含每条视频轨一个 <video>)
+ *   - 视频层容器    #videoLayers        (内含每条视频/音频轨一个 <video>，音频轨隐藏只出声)
  *   - 单轨 video    <video id="vlayer-<trackId>" class="video-layer" data-track-id>
  *   - 文字/手柄层   #overlayLayer       (文字 WYSIWYG + 选中手柄, overlay.js 用)
  *
  * 核心:
  *   - 主时钟 performance.now() 驱动 playhead (时间轴绝对秒), 引擎唯一真值。
- *   - 每条视频轨一个 <video>; 每帧把各轨 currentTime 对齐到映射源时间;
- *     漂移 > DRIFT(0.1s) 才纠正; 片段边界换源走 loadeddata; switching 期不纠正。
+ *   - 每条音视频轨一个 <video>; 视频轨每帧按播放头校正 currentTime。
+ *     音频轨作为预览主时钟，播放中尽量连续播放，只在 seek/片段切换/大漂移时纠正。
  *   - PiP: scale/cx/cy/opacity 用 CSS 内联定位 (与导出 overlay 像素同公式);
  *     z-index = 轨道在 tracks 数组中的 index (越大越上层)。
  *   - 文字层: 复用 v1 buildTextNode, 按 start<=t<start+duration 显隐。
- *   - 音频: 各 <video> 并发出声(浏览器混音), 按轨 muted/volume 控制, 同源不重复发声。
+ *   - 音频: 有独立音频轨时只由音频轨出声；旧工程无音频轨时回退到视频轨音频。
  *
  * 复用 v1 player.js 已实测可靠: letterbox 布局、换源时序(src→load→loadeddata→
  * seek→seeked)、_safeSeek 防御、buildTextNode/hexToRgba 文字节点、error 跳过、
@@ -116,7 +116,7 @@
     var fontPx = (tx.fontSizePct != null ? tx.fontSizePct : 0.06) * boxH;
     el.style.fontSize = fontPx + 'px';
     el.style.lineHeight = 1.2;
-    el.style.fontFamily = '"Microsoft YaHei","微软雅黑",sans-serif';
+    el.style.fontFamily = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei","微软雅黑",sans-serif';
     el.style.textAlign = tx.align || 'left';
     el.style.color = hexToRgba(tx.color || '#FFFFFF', tx.opacity != null ? tx.opacity : 1);
 
@@ -162,9 +162,10 @@
    * 派生时间轴索引 (engine_v2 §1) — 若 app.js 已提供 getTimeline 则复用其结构,
    * 否则本模块自建并暴露 App.getTimeline / App.rebuildTimeline。
    * timeline 结构: { videoTracks:[{track, clips:[{clip,media,tStart,tEnd}]}],
+   *                  audioTracks:[{track, clips:[{clip,media,tStart,tEnd}]}],
    *                  textClips:[{clip,track}], totalDuration, mediaById }
    * ===================================================================== */
-  var timeline = { videoTracks: [], textClips: [], totalDuration: 0, mediaById: new Map() };
+  var timeline = { videoTracks: [], audioTracks: [], textClips: [], totalDuration: 0, mediaById: new Map() };
 
   function rebuildTimeline() {
     var proj = P();
@@ -172,18 +173,18 @@
     var media = proj.media || [];
     for (var i = 0; i < media.length; i++) mediaById.set(media[i].id, media[i]);
 
-    var videoTracks = [], textClips = [], total = 0;
+    var videoTracks = [], audioTracks = [], textClips = [], total = 0;
     var tracks = proj.tracks || [];
     for (var ti = 0; ti < tracks.length; ti++) {
       var track = tracks[ti];
-      if (track.kind === 'video') {
+      if (track.kind === 'video' || track.kind === 'audio') {
         var segs = [];
         var clips = track.clips || [];
         for (var ci = 0; ci < clips.length; ci++) {
           var clip = clips[ci];
           var m = mediaById.get(clip.mediaId);
           if (!m) continue;                         // 源缺失: 跳过
-          // 公式 A: 视频片段时间轴长度 = (out-in)/speed；定格片段 = duration（与 in/out 解耦）
+          // 公式 A: 音视频片段时间轴长度 = (out-in)/speed；定格片段 = duration（与 in/out 解耦）
           var dur = clip.freeze ? (clip.duration || 0) : (clip.out - clip.in) / (clip.speed || 1);
           if (!(dur > 0)) continue;                 // 非法区间: 跳过
           var tStart = clip.start, tEnd = clip.start + dur;
@@ -191,7 +192,8 @@
           if (tEnd > total) total = tEnd;
         }
         segs.sort(function (a, b) { return a.tStart - b.tStart; });
-        videoTracks.push({ track: track, clips: segs, zIndex: ti });
+        if (track.kind === 'video') videoTracks.push({ track: track, clips: segs, zIndex: ti });
+        else audioTracks.push({ track: track, clips: segs, zIndex: ti });
       } else if (track.kind === 'text') {
         var tclips = track.clips || [];
         for (var k = 0; k < tclips.length; k++) {
@@ -202,7 +204,7 @@
         }
       }
     }
-    timeline = { videoTracks: videoTracks, textClips: textClips, totalDuration: total, mediaById: mediaById };
+    timeline = { videoTracks: videoTracks, audioTracks: audioTracks, textClips: textClips, totalDuration: total, mediaById: mediaById };
     return timeline;
   }
 
@@ -211,8 +213,9 @@
   if (!App.rebuildTimeline) App.rebuildTimeline = rebuildTimeline;
   // 引擎内部恒用本模块的 timeline 结构, 不依赖 app 的 getTimeline 形态。
   function TL() { return timeline; }
+  function mediaTracks(tl) { return (tl.videoTracks || []).concat(tl.audioTracks || []); }
 
-  // 在某条视频轨上二分定位 t 时刻的活动片段 (半开区间), 无则 null (该轨此刻透明)
+  // 在某条媒体轨上二分定位 t 时刻的活动片段 (半开区间)，无则 null
   function activeClipOnTrack(vt, t) {
     var segs = vt.clips, lo = 0, hi = segs.length - 1, ans = -1;
     while (lo <= hi) {
@@ -226,7 +229,7 @@
   }
 
   /* =====================================================================
-   * TrackPlayer — 管理一条视频轨的单个 <video>
+   * TrackPlayer — 管理一条音视频轨的单个 <video>
    * ===================================================================== */
   function TrackPlayer(trackId, container) {
     this.trackId = trackId;
@@ -243,6 +246,7 @@
     this.switching = false;
     this._pendingSeek = null;
     this._wantPlay = false;
+    this._lastCorrectionAt = 0;
     this._bind();
   }
 
@@ -257,7 +261,7 @@
     };
     this._onError = function () {
       self.switching = false; self.curMediaId = null; self.curClipId = null;
-      if (App.toast) App.toast('某轨视频片段加载失败，该轨此处留空', 'error', 1800);
+      if (App.toast) App.toast('某轨音视频片段加载失败，该轨此处留空', 'error', 1800);
     };
     this.v.addEventListener('loadeddata', this._onLoaded);
     this.v.addEventListener('seeked', this._onSeeked);
@@ -311,7 +315,9 @@
     this._startedWall = 0;
     this._startedHead = 0;
     this.rafId = 0;
-    this.DRIFT = 0.10;               // 漂移阈值(秒), 超过才强制纠正 (DRIFT_EPS contract §6.1)
+    this.DRIFT = 0.10;               // 视频轨漂移阈值(秒), 超过才强制纠正 (DRIFT_EPS contract §6.1)
+    this.AUDIO_DRIFT = 0.45;         // 音频预览只纠正大漂移，避免 MP3/AAC 播放中频繁 seek 卡顿
+    this.AUDIO_CORRECT_MS = 900;     // 音频大漂移纠正冷却时间
     this._lastTextSig = '';
     this._forceTextRefresh = false;
     this._bindVisibility();
@@ -322,8 +328,9 @@
     rebuildTimeline();
     var tl = TL();
     var want = new Set();
-    for (var i = 0; i < tl.videoTracks.length; i++) {
-      var id = tl.videoTracks[i].track.id;
+    var mts = mediaTracks(tl);
+    for (var i = 0; i < mts.length; i++) {
+      var id = mts[i].track.id;
       want.add(id);
       if (!this.players.has(id)) this.players.set(id, new TrackPlayer(id, this.videoLayer));
     }
@@ -351,6 +358,12 @@
   };
   PreviewEngine.prototype._advanceClock = function () {
     if (!this.playing) return;
+    var audioClock = this._audioClockTime();
+    if (audioClock != null) {
+      this.playhead = audioClock;
+      this._rebaseClock();
+      return;
+    }
     var now = (window.performance && performance.now) ? performance.now() : Date.now();
     var dt = (now - this._startedWall) / 1000 * this.rate;
     this.playhead = this._startedHead + dt;
@@ -426,16 +439,16 @@
     this._advanceClock();
     if (this.playhead >= tl.totalDuration) { this.stop(); return; }
     this.syncVideos(this.playhead, false);
+    this.applyAudio();
     this.layoutAll();
     this.renderTexts(this.playhead);
     this._emitTime();
   };
 
-  /* ---------- 多轨同步: 每帧把各轨 video 对齐到 t ---------- */
-  PreviewEngine.prototype.syncVideos = function (t, forceReseek) {
-    var tl = TL();
-    for (var i = 0; i < tl.videoTracks.length; i++) {
-      var vt = tl.videoTracks[i];
+  /* ---------- 多轨同步: 每帧把各轨 media 对齐到 t ---------- */
+  PreviewEngine.prototype._syncMediaTrackList = function (list, t, forceReseek, showVideo, useSmoothAudio) {
+    for (var i = 0; i < list.length; i++) {
+      var vt = list[i];
       var p = this.players.get(vt.track.id);
       if (!p) continue;
       var seg = vt.track.hidden ? null : activeClipOnTrack(vt, t);
@@ -443,9 +456,10 @@
       if (!seg) { p.clearMedia(); continue; }            // 间隙/隐藏 → 透明
       // 离线素材(streamId 失效)无可播放源 → 该段留黑, 不请求 /api/stream?id=null (设计 §4.1)
       if (!seg.media || !seg.media.streamId || seg.media.offline) { p.clearMedia(); continue; }
+      if (!showVideo && !seg.media.hasAudio) { p.clearMedia(); continue; }
 
       // 定格片段: 把该轨视频定位到源帧 clip.in 并钉住(暂停 + 不前进), 整段显示同一静止帧。
-      if (seg.clip.freeze) {
+      if (showVideo && seg.clip.freeze) {
         var ft = seg.clip.in;
         if (p.curClipId !== seg.clip.id || p.curMediaId !== seg.media.id) {
           p.curClipId = seg.clip.id;
@@ -454,7 +468,7 @@
           if (!p.v.paused) { try { p.v.pause(); } catch (e) {} }   // 钉住: 不随主时钟前进
           if (Math.abs(p.v.currentTime - ft) > this.DRIFT) { p._wantPlay = false; p._safeSeek(ft); }
         }
-        p.v.style.display = '';
+        p.v.style.display = showVideo ? '' : 'none';
         continue;
       }
 
@@ -468,11 +482,22 @@
         p.curClipId = seg.clip.id;
         p.setMedia(seg.media, want, this.playing);
         applyRate(p.v, spd);                             // 换源后浏览器会复位 rate, 故每次都设
-        p.v.style.display = '';
+        p.v.style.display = showVideo ? '' : 'none';
       } else if (!p.switching) {                          // 同片段播放中
         applyRate(p.v, spd);                             // 同源持续保证 rate/保音调不被复位
         if (forceReseek) {
           p._wantPlay = this.playing; p.switching = true; p._safeSeek(want);
+        } else if (useSmoothAudio) {
+          // 音乐/旁白播放中频繁 seek 会直接听成卡顿。音频轨只在明显失步时低频纠正，
+          // 常规情况下让浏览器解码器连续播放，并用音频 currentTime 反推播放头。
+          var ahave = p.v.currentTime;
+          var drift = Math.abs(ahave - want);
+          var nowMs = (window.performance && performance.now) ? performance.now() : Date.now();
+          if (drift > this.AUDIO_DRIFT && nowMs - (p._lastCorrectionAt || 0) > this.AUDIO_CORRECT_MS) {
+            p._lastCorrectionAt = nowMs;
+            p._wantPlay = this.playing; p.switching = true; p._safeSeek(want);
+          }
+          if (this.playing && p.v.paused && !p.switching) p.v.play().catch(function () {});
         } else {
           // 漂移判定在源秒域: want 已含 speed, currentTime 本就是源秒, 同域直接比较
           var have = p.v.currentTime;
@@ -481,18 +506,48 @@
           }
           if (this.playing && p.v.paused && !p.switching) p.v.play().catch(function () {});
         }
-        p.v.style.display = '';
+        p.v.style.display = showVideo ? '' : 'none';
       } else {
         applyRate(p.v, spd);                             // switching 中也设, 保证 seeked 后即正确
-        p.v.style.display = '';                            // switching 中: 保持上一帧
+        p.v.style.display = showVideo ? '' : 'none';       // switching 中: 视频保持上一帧，音频轨保持隐藏
       }
     }
+  };
+  PreviewEngine.prototype.syncVideos = function (t, forceReseek) {
+    var tl = TL();
+    this._syncMediaTrackList(tl.videoTracks || [], t, forceReseek, true, false);
+    this._syncMediaTrackList(tl.audioTracks || [], t, forceReseek, false, true);
+  };
+
+  PreviewEngine.prototype._audioClockTime = function () {
+    if (P().output && P().output.keepAudio === false) return null;
+    var tl = TL();
+    var audioTracks = tl.audioTracks || [];
+    var useAudioTracks = audioTracks.length > 0;
+    var sourceTracks = useAudioTracks ? audioTracks : (tl.videoTracks || []);
+    for (var i = 0; i < sourceTracks.length; i++) {
+      var vt = sourceTracks[i];
+      if (!vt || !vt.track || vt.track.muted || vt.track.hidden) continue;
+      var p = this.players.get(vt.track.id);
+      if (!p || p.switching || p.v.paused || p.v.readyState < 2) continue;
+      var seg = activeClipOnTrack(vt, this.playhead);
+      if (!seg || !seg.media || !seg.media.hasAudio || p.curClipId !== seg.clip.id || p.curMediaId !== seg.media.id) continue;
+      var spd = seg.clip.speed || 1;
+      var tt = seg.clip.start + (p.v.currentTime - seg.clip.in) / spd;
+      if (tt < seg.tStart - 0.05 || tt > seg.tEnd + 0.05) continue;
+      return Math.min(Math.max(tt, 0), tl.totalDuration);
+    }
+    return null;
   };
 
   /* ---------- 合成布局: PiP 矩形 + z 序 + opacity ---------- */
   PreviewEngine.prototype.layoutAll = function () {
     var box = App.getBoxSize();
     var tl = TL();
+    for (var a = 0; a < (tl.audioTracks || []).length; a++) {
+      var ap = this.players.get(tl.audioTracks[a].track.id);
+      if (ap) ap.v.style.display = 'none';
+    }
     for (var i = 0; i < tl.videoTracks.length; i++) {
       var vt = tl.videoTracks[i];
       var p = this.players.get(vt.track.id);
@@ -512,17 +567,28 @@
     if (st.display === 'none') st.display = '';
   };
 
-  /* ---------- 音频: 按轨 muted/volume, 避免重复源 ---------- */
+  /* ---------- 音频: 新工程用音频轨；无音频轨的旧工程回退到视频轨 ---------- */
   PreviewEngine.prototype.applyAudio = function () {
     var keepAudio = !P().output || P().output.keepAudio !== false;
     var tl = TL();
-    for (var i = 0; i < tl.videoTracks.length; i++) {
-      var vt = tl.videoTracks[i];
+    var audioTracks = tl.audioTracks || [];
+    var useAudioTracks = audioTracks.length > 0;
+
+    if (useAudioTracks) {
+      for (var vi = 0; vi < (tl.videoTracks || []).length; vi++) {
+        var vp = this.players.get(tl.videoTracks[vi].track.id);
+        if (vp) vp.v.muted = true;
+      }
+    }
+
+    var sourceTracks = useAudioTracks ? audioTracks : (tl.videoTracks || []);
+    for (var i = 0; i < sourceTracks.length; i++) {
+      var vt = sourceTracks[i];
       var p = this.players.get(vt.track.id);
       if (!p) continue;
       var seg = activeClipOnTrack(vt, this.playhead);
       var hasAudio = !!(seg && seg.media && seg.media.hasAudio);
-      p.v.muted = !!(vt.track.muted) || !keepAudio || !hasAudio;
+      p.v.muted = !!(vt.track.muted) || !!(vt.track.hidden) || !keepAudio || !hasAudio;
       p.v.volume = (vt.track.volume != null ? vt.track.volume : 1);
     }
   };

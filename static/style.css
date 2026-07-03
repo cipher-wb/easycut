@@ -1,5 +1,5 @@
 /* ===================================================================
-   Lyra (ASTRA) — Claude 风格皮肤（浅色为主 · 暖色调 · 预览区保持暖深色）
+   Lyra (ASTRA) — Codex 风格皮肤（浅色为主 · 暖色调 · 预览区保持暖深色）
    可直接替换 static/style.css —— 选择器与原文件一一对应
    布局：左=素材库  中上=预览  右=属性  下=多轨时间轴
    =================================================================== */
@@ -17,7 +17,7 @@
   --text-dim: #6F6A5C;      /* 次要文字 */
   --text-faint: #A39C8A;    /* 提示/占位 */
 
-  /* —— 点缀：Claude 陶土橙（克制使用）—— */
+  /* —— 点缀：Codex 陶土橙（克制使用）—— */
   --accent: #D97757;        /* 陶土橙 */
   --accent-2: #C2603F;      /* 悬停加深 */
   --accent-soft: #F5E5DC;   /* 橙的极浅底（选中行/高亮底） */
@@ -36,6 +36,7 @@
   --lane-2: #E6E2D6;        /* 视频轨条纹 */
   --lane-text: #E8EAEF;     /* 文字轨底 */
   --head-video-grad: #F3E7DC;
+  --head-audio-grad: #E4EEE8;
   --head-text-grad:  #E7EAF0;
   --overlay-bg: rgba(240,238,230,.82);
   --overlay-inner: rgba(255,254,251,.7);
@@ -46,6 +47,8 @@
   /* —— 片段 / 轨道配色（降饱和的暖色）—— */
   --clip-video:   #CF8A5E;  /* 视频片段：柔和陶土 */
   --clip-video-b: #BC7747;
+  --clip-audio:   #6C9A87;  /* 音频片段：暖雾绿 */
+  --clip-audio-b: #568571;
   --clip-text:    #8493AC;  /* 文字片段：雾蓝灰（与橙形成温和区分） */
   --clip-text-b:  #6F7E98;
   --clip-sel:     #D97757;
@@ -97,6 +100,7 @@
   --lane-2: #25211B;
   --lane-text: #21242A;
   --head-video-grad: #3A2D23;
+  --head-audio-grad: #263A31;
   --head-text-grad:  #272A31;
   --overlay-bg: rgba(16,14,11,.84);
   --overlay-inner: rgba(42,38,32,.6);
@@ -106,6 +110,8 @@
 
   --clip-video:   #C97F54;
   --clip-video-b: #B36C40;
+  --clip-audio:   #5F927D;
+  --clip-audio-b: #4D7E6A;
   --clip-text:    #74829B;
   --clip-text-b:  #5F6D86;
   --clip-sel:     #DD8160;
@@ -238,11 +244,19 @@ select { cursor: pointer; }
 }
 .col-resizer:hover, .col-resizer.dragging { background: var(--accent-soft); }
 #timelineResizer {
-  flex: 0 0 6px; height: 6px; width: 100%;
-  cursor: ns-resize; background: transparent; z-index: 50;
-  border-top: 1px solid var(--line); transition: background .12s ease;
+  flex: 0 0 12px; height: 12px; width: 100%;
+  cursor: ns-resize; background: var(--panel-2); z-index: 70;
+  border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  transition: background .12s ease; position: relative; touch-action: none;
+}
+#timelineResizer::before {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 78px; max-width: 22vw; height: 3px;
+  transform: translate(-50%, -50%);
+  border-radius: 999px; background: var(--line);
 }
 #timelineResizer:hover, #timelineResizer.dragging { background: var(--accent-soft); }
+#timelineResizer:hover::before, #timelineResizer.dragging::before { background: var(--accent); }
 
 /* ---------- 左侧素材库 #mediaPanel ---------- */
 #mediaPanel {
@@ -289,6 +303,15 @@ select { cursor: pointer; }
 .mi-thumb {
   display: block; width: 100%; height: 118px; object-fit: cover;
   background: var(--canvas-bg); border-radius: 7px; pointer-events: none;
+}
+.mi-audio-thumb {
+  display: flex; align-items: center; justify-content: center;
+  font-size: 42px; color: var(--accent);
+  background:
+    linear-gradient(135deg, var(--accent-soft), transparent),
+    var(--panel-2);
+  border: 1px solid var(--line);
+  box-sizing: border-box;
 }
 .mi-name {
   margin-top: 8px; font-size: 12px; color: var(--text); font-weight: 500;
@@ -442,7 +465,7 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
    底部多轨时间轴 #timelinePanel
    =================================================================== */
 #timelinePanel {
-  flex: 0 1 252px; height: 252px; min-height: 120px;   /* 可被压缩：窗口很矮时自动缩，不溢出 */
+  flex: 0 0 252px; height: 252px; min-height: 140px;
   background: var(--panel); border-top: 1px solid var(--line);
   display: flex; flex-direction: column;
 }
@@ -501,6 +524,7 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
   align-items: center; gap: 4px 5px;
 }
 .track-head.video { background: linear-gradient(180deg, var(--head-video-grad), var(--panel-2)); }
+.track-head.audio { background: linear-gradient(180deg, var(--head-audio-grad), var(--panel-2)); }
 .track-head.text  { background: linear-gradient(180deg, var(--head-text-grad), var(--panel-2)); }
 .track-head.selected { box-shadow: inset 3px 0 0 0 var(--accent); }
 .track-head.locked { opacity: .85; }
@@ -567,6 +591,10 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
   background: var(--lane);
 }
 .track-row.video { background: repeating-linear-gradient(90deg, var(--lane) 0, var(--lane) 39px, var(--lane-2) 40px); }
+.track-row.audio {
+  background: var(--lane);
+  box-shadow: inset 3px 0 0 var(--clip-audio);
+}
 .track-row.text  { background: var(--lane-text); }
 .track-row.hidden { opacity: .45; }
 .track-row.locked::after {
@@ -592,6 +620,13 @@ fieldset.group legend { font-size: 12px; color: var(--text-dim); padding: 0 5px;
 .clip {
   background-color: var(--clip-video);
   border: 1px solid var(--clip-video-b);
+}
+.clip.audio {
+  background-image:
+    repeating-linear-gradient(90deg, rgba(255,255,255,.18) 0 2px, transparent 2px 8px),
+    linear-gradient(180deg, var(--clip-audio), var(--clip-audio-b));
+  background-color: var(--clip-audio);
+  border: 1px solid var(--clip-audio-b);
 }
 .text-clip {
   background-color: var(--clip-text);
@@ -864,7 +899,7 @@ progress { -webkit-appearance: none; appearance: none; border: none; background:
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ===================================================================
-   工程系统（迁移到 Claude 暖色风格，亮/暗自适应）
+   工程系统（迁移到 Codex 暖色风格，亮/暗自适应）
    —— 顶栏工程名 + 未保存指示 / 离线横幅 / 工程面板 / 保存对话框 /
       离线素材卡片与时间轴离线片段 / warn 级 toast
    =================================================================== */

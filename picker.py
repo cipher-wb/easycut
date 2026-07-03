@@ -6,8 +6,8 @@ picker.py — 独立子进程，用 tkinter.filedialog 弹出系统“打开文�
 与 http.server 工作线程冲突的问题。
 
 用法（命令行）：
-    python picker.py open            # 单选 mp4，打印所选绝对路径(UTF-8)，一行
-    python picker.py open-multiple   # 多选 mp4，每个绝对路径一行
+    python picker.py open            # 单选媒体，打印所选绝对路径(UTF-8)，一行
+    python picker.py open-multiple   # 多选媒体，每个绝对路径一行
     python picker.py save [建议文件名]  # 另存为，打印所选绝对路径，一行
 
 输出协议：
@@ -23,7 +23,15 @@ import sys
 import os
 import json
 
-MP4_FILETYPES = [("MP4 视频", "*.mp4"), ("所有文件", "*.*")]
+MEDIA_FILETYPES = [
+    ("媒体文件", ("*.mp4", "*.mov", "*.m4v", "*.mkv", "*.webm", "*.avi", "*.mp3", "*.wav", "*.m4a", "*.aac", "*.flac", "*.ogg", "*.opus")),
+    ("视频文件", ("*.mp4", "*.mov", "*.m4v", "*.mkv", "*.webm", "*.avi")),
+    ("音频文件", ("*.mp3", "*.wav", "*.m4a", "*.aac", "*.flac", "*.ogg", "*.opus")),
+    ("MP4 视频", "*.mp4"),
+    ("MP3 音频", "*.mp3"),
+    ("所有文件", "*.*"),
+]
+EXPORT_FILETYPES = [("MP4 视频", "*.mp4"), ("所有文件", "*.*")]
 
 
 def _make_root():
@@ -55,8 +63,8 @@ def do_open(multiple):
     try:
         if multiple:
             sel = filedialog.askopenfilenames(
-                title="选择 mp4 视频（可多选）",
-                filetypes=MP4_FILETYPES,
+                title="选择媒体（可多选）",
+                filetypes=MEDIA_FILETYPES,
                 parent=root,
             )
             # askopenfilenames 在某些平台返回 tcl 字符串元组，规范成 list[str]
@@ -65,8 +73,8 @@ def do_open(multiple):
             paths = [os.path.abspath(p) for p in sel if p]
         else:
             p = filedialog.askopenfilename(
-                title="选择 mp4 视频",
-                filetypes=MP4_FILETYPES,
+                title="选择媒体",
+                filetypes=MEDIA_FILETYPES,
                 parent=root,
             )
             paths = [os.path.abspath(p)] if p else []
@@ -90,7 +98,7 @@ def do_save(suggest_name):
             title="导出为 mp4 文件",
             defaultextension=".mp4",
             initialfile=initialfile,
-            filetypes=MP4_FILETYPES,
+            filetypes=EXPORT_FILETYPES,
             parent=root,
         )
         return {"path": os.path.abspath(p) if p else None}

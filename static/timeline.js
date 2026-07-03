@@ -129,6 +129,9 @@
     // 公式 A（speed_design.md §0）：视频时间轴长度 = (out - in) / speed
     return ((clip.out || 0) - (clip.in || 0)) / (clip.speed || 1);
   }
+  function trackKindName(kind) {
+    return kind === 'text' ? '文字轨' : (kind === 'audio' ? '音频轨' : '视频轨');
+  }
 
   // doSpeedTrim 需后段左缘作上界（app.js 有 nextClipStart，本模块无，新增本地 helper）
   function nextClipStart(track, clip) {
@@ -206,12 +209,12 @@
       h.dataset.trackId = t.id;
       h.style.height = TRACK_H + 'px';
 
-      var name = el('span', 'th-name', t.name || (t.kind === 'video' ? '视频轨' : '文字轨'));
+      var name = el('span', 'th-name', t.name || trackKindName(t.kind));
       name.title = '双击重命名';
       h.appendChild(name);
 
       var ctrls = el('div', 'th-ctrls');
-      if (t.kind === 'video') {
+      if (t.kind === 'video' || t.kind === 'audio') {
         ctrls.appendChild(iconBtn('th-mute', t.muted ? '🔇' : '🔊', 'toggleMute', '静音'));
         var vol = el('input', 'th-volume');
         vol.type = 'range'; vol.min = '0'; vol.max = '1'; vol.step = '0.01';
@@ -323,6 +326,7 @@
   function renderClip(clip, track) {
     var dur = clipDur(clip, track);
     var isText = (track.kind === 'text');
+    var isAudio = (track.kind === 'audio');
     var c = el('div', (isText ? 'text-clip' : 'clip') + ' ' + track.kind);
     if (clip.freeze) c.classList.add('freeze-clip');
     c.dataset.clipId = clip.id;
@@ -333,6 +337,9 @@
 
     if (isText) {
       c.appendChild(el('span', 'tc-label clip-label', (clip.content || '文字').replace(/\n/g, ' ').slice(0, 24)));
+    } else if (isAudio) {
+      var am = App.getMedia ? App.getMedia(clip.mediaId) : null;
+      c.appendChild(el('span', 'clip-label', '♪ ' + (am ? am.name : '音频')));
     } else {
       var m = App.getMedia ? App.getMedia(clip.mediaId) : null;
       // 离线素材（工程系统）：原文件丢失 → 加 .offline 样式，标“素材离线”，
@@ -917,8 +924,9 @@
         var open = elAddTrackMenu.hidden === false || elAddTrackMenu.classList.contains('open');
         if (open) closeAddTrackMenu(); else openAddTrackMenu();
       } else {
-        // 无菜单容器时退化为 confirm 选择
-        var kind = window.confirm('确定新增视频轨？（取消 = 新增文字轨）') ? 'video' : 'text';
+        // 无菜单容器时退化为文本选择
+        var kind = (window.prompt('新增轨道类型：video / audio / text', 'video') || 'video').toLowerCase();
+        if (kind !== 'audio' && kind !== 'text') kind = 'video';
         onAddTrack(kind);
       }
     });
@@ -926,7 +934,7 @@
       elAddTrackMenu.addEventListener('click', function (e) {
         var item = e.target.closest('[data-kind]');
         if (!item) return;
-        onAddTrack(item.dataset.kind === 'text' ? 'text' : 'video');
+        onAddTrack(item.dataset.kind === 'text' ? 'text' : (item.dataset.kind === 'audio' ? 'audio' : 'video'));
         closeAddTrackMenu();
       });
       document.addEventListener('click', function () { closeAddTrackMenu(); });
@@ -943,15 +951,27 @@
    * 从素材库拖入轨道（dropFromBin）—— HTML5 drag
    * ===================================================================== */
   var insertCueEl = null;
+  function mediaKind(media) {
+    if (App.mediaKind) return App.mediaKind(media);
+    if (media && (media.kind === 'audio' || media.kind === 'video')) return media.kind;
+    return (media && media.width && media.height) ? 'video' : 'audio';
+  }
+  function canDropMediaOnTrack(media, track) {
+    if (!media || !track || track.locked) return false;
+    if (track.kind === 'video') return mediaKind(media) === 'video';
+    if (track.kind === 'audio') return !!media.hasAudio || mediaKind(media) === 'audio';
+    return false;
+  }
   function bindBinDrop() {
     elArea.addEventListener('dragover', function (e) {
       if (!hasMediaId(e)) return;
       e.preventDefault();
+      var media = App.getMedia ? App.getMedia(getMediaId(e)) : null;
       e.dataTransfer.dropEffect = 'copy';
       var lane = laneAt(e);
       if (lane) {
         var track = findTrack(lane.dataset.trackId);
-        if (track && track.kind === 'video' && !track.locked) {
+        if (canDropMediaOnTrack(media, track)) {
           showInsertCue(lane, dropTimeAt(e.clientX, e.altKey, 0));
           return;
         }
@@ -967,8 +987,14 @@
       var lane = laneAt(e);
       if (!lane) return;
       var track = findTrack(lane.dataset.trackId);
-      if (!track || track.kind !== 'video' || track.locked) { App.toast && App.toast('请拖到未锁定的视频轨', 'error'); return; }
       var media = App.getMedia ? App.getMedia(mediaId) : null;
+      if (!canDropMediaOnTrack(media, track)) {
+        var msg = '请拖到未锁定的音视频轨';
+        if (track && track.kind === 'video' && mediaKind(media) === 'audio') msg = '音频素材请拖到音频轨';
+        else if (track && track.kind === 'audio' && media && !media.hasAudio && mediaKind(media) !== 'audio') msg = '该素材没有可用音频';
+        App.toast && App.toast(msg, 'error');
+        return;
+      }
       var dur = media ? (media.duration || 0) : 0;
       var startSec = dropTimeAt(e.clientX, e.altKey, dur);
       // 防重叠
@@ -976,7 +1002,9 @@
       if (resolved == null) { App.toast && App.toast('该位置放不下整段，请换位置', 'error'); return; }
       // 单次压栈由 addClipFromMedia 内部完成（§3.2）；此处不得再 pushHistory，否则双压（多一步撤销）。
       // 传 resolved 为最终落点；addClipFromMedia 不再重复磁吸（其默认 in/out + contain 变换见 app.js）。
-      var clipId = App.addClipFromMedia(mediaId, track.id, resolved, { noHistory: false });
+      var clipId = track.kind === 'audio'
+        ? App.addAudioClipFromMedia(mediaId, track.id, resolved, { noHistory: false })
+        : App.addClipFromMedia(mediaId, track.id, resolved, { noHistory: false });
       if (clipId) doSelectClip(track.id, (typeof clipId === 'object' ? clipId.id : clipId));
     });
   }
@@ -988,7 +1016,7 @@
   }
   function getMediaId(e) {
     if (!e.dataTransfer) return '';
-    return e.dataTransfer.getData('application/x-mediaid') || e.dataTransfer.getData('text/x-mediaid') || '';
+    return e.dataTransfer.getData('application/x-mediaid') || e.dataTransfer.getData('text/x-mediaid') || window.__LYRA_DRAG_MEDIA_ID || '';
   }
   // 定位拖放目标轨道行：优先用事件目标的 .track-row 祖先；若被刻度线/播放头等覆盖层拦截，
   // 则兜底按 clientY 在 #tracksArea 的各 .track-row 中按几何命中（不依赖 z 序/命中元素）。
@@ -1267,7 +1295,7 @@
    *   trackDropInfo(clientX, clientY) -> {trackId, timeSec} | null
    *   setDropTargetTrack(trackId | null) -> 给匹配的 .track-row 加/清 .drop-active
    * ===================================================================== */
-  // 几何命中 #tracksArea 内某条【视频且未锁】轨道行；命中返回 {trackId, timeSec}（timeSec>=0），否则 null。
+  // 几何命中 #tracksArea 内某条【视频/音频且未锁】轨道行；命中返回 {trackId, kind, timeSec}（timeSec>=0），否则 null。
   function trackDropInfo(clientX, clientY) {
     if (!elArea) return null;
     var rows = elArea.querySelectorAll('.track-row');
@@ -1275,10 +1303,10 @@
       var r = rows[i].getBoundingClientRect();
       if (clientX >= r.left && clientX < r.right && clientY >= r.top && clientY < r.bottom) {
         var track = findTrack(rows[i].dataset.trackId);
-        if (track && track.kind === 'video' && !track.locked) {
-          return { trackId: track.id, timeSec: clientXToTime(clientX) };
+        if (track && (track.kind === 'video' || track.kind === 'audio') && !track.locked) {
+          return { trackId: track.id, kind: track.kind, timeSec: clientXToTime(clientX) };
         }
-        return null; // 命中了某行但非合法视频轨 → 不作为轨道目标
+        return null; // 命中了某行但非合法音视频轨 → 不作为轨道目标
       }
     }
     return null;

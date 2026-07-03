@@ -9,7 +9,7 @@ ffmpeg_build.py (v2) — 纯函数模块：把 v2 多轨合成 project 模型（
 
 实现严格依据 _build/ffmpeg_recipe_v2.md 的本机实测结论（v1 低层结论全部沿用）：
   - 路径转义 ff_escape_path：先把 '\\' 全换 '/'，再把 ':' 换成 '\\:'（单 \\:），
-    结果形如 C\\:/Windows/Fonts/msyh.ttc；textfile=/fontfile= 的值用单引号包裹。
+    例如 Windows 路径会变成 C\\:/Windows/Fonts/msyh.ttc；textfile=/fontfile= 的值用单引号包裹。
   - 视频合成 = 黑底底图(d=totalDuration) + 逐视频轨(底→顶=z序)逐片段
       trim -> setpts=PTS-STARTPTS+start/TB -> scale=clipW:clipH -> setsar=1
       [-> format=yuva420p,colorchannelmixer=aa=opacity (仅 opacity<1)]
@@ -26,6 +26,7 @@ ffmpeg_build.py (v2) — 纯函数模块：把 v2 多轨合成 project 模型（
 """
 
 import os
+import sys
 
 
 # ---------------------------------------------------------------------------
@@ -33,13 +34,55 @@ import os
 # ---------------------------------------------------------------------------
 
 def ff_escape_path(p):
-    """把一个 Windows/任意路径转成 ffmpeg 滤镜图里安全的写法。
+    """把一个任意平台路径转成 ffmpeg 滤镜图里安全的写法。
     规则（实测，见 ffmpeg_recipe_v2.md / v1 §6）：
       1) 反斜杠 '\\' -> 正斜杠 '/'
       2) 冒号 ':' -> '\\:'
     返回的字符串还需在外层用单引号包裹（调用处负责）。
     """
     return str(p).replace("\\", "/").replace(":", "\\:")
+
+
+def _native_path(p):
+    """把工程里统一的正斜杠路径还原为当前平台可检查的本机路径。"""
+    return str(p or "").replace("/", os.sep).replace("\\", os.sep)
+
+
+def _first_existing(paths):
+    for p in paths:
+        if p and os.path.isfile(p):
+            return os.path.abspath(p)
+    return None
+
+
+def find_default_font():
+    """返回当前系统上最适合中文 drawtext 的字体路径；找不到则返回平台默认占位。"""
+    if os.name == "nt":
+        windir = os.environ.get("WINDIR", "C:\\Windows")
+        hit = _first_existing([
+            os.path.join(windir, "Fonts", "msyh.ttc"),
+            os.path.join(windir, "Fonts", "simhei.ttf"),
+            os.path.join(windir, "Fonts", "simsun.ttc"),
+        ])
+        return (hit or os.path.join(windir, "Fonts", "msyh.ttc")).replace("\\", "/")
+    if sys.platform == "darwin":
+        hit = _first_existing([
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/PingFangUI.ttc",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/System/Library/Fonts/Supplemental/Songti.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ])
+        return hit or "/System/Library/Fonts/Hiragino Sans GB.ttc"
+    hit = _first_existing([
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    ])
+    return hit or "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
 
 def hex_to_0x(color):
@@ -144,7 +187,7 @@ TEXT_CLIP_DEFAULTS = {
     "content": "双击编辑文字",
     "start": 0.0, "duration": 3.0,
     "xPct": 0.1, "yPct": 0.1, "wPct": 0.5,
-    "fontFile": "C:/Windows/Fonts/msyh.ttc",
+    "fontFile": find_default_font(),
     "fontSizePct": 0.06, "color": "#FFFFFF", "opacity": 1.0,
     "align": "left",
     "border": False, "borderColor": "#000000", "borderWPct": 0.004,
@@ -264,7 +307,7 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
                        # 已按 z 序(底→顶) + 轨内 start 排好，可直接顺序 overlay
         text_clips:  [ {content, start, end, fontFile, fontsize, ... 全部已套默认/clamp} ],
                        # 已按 z 序(底→顶) + 轨内 start 排好；隐藏文字轨已剔除
-        audio_clips: [ {streamIdx, in, out, start, volume} ],  # keepAudio 且未静音有声轨的片段
+        audio_clips: [ {streamIdx, in, out, start, volume} ],  # keepAudio 下参与混音的音频片段
       }
     抛 ExportValidationError 表示同步 400。
     """
@@ -289,12 +332,14 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
     output = normalize_output(project, media_by_id)
     OW, OH = output["width"], output["height"]
 
-    # ---- 第一遍：收集所有视频片段与文字片段，计算 totalDuration ----
+    # ---- 第一遍：收集所有视频、音频与文字片段，计算 totalDuration ----
     # 保留 tracks 数组顺序（index 0 = 底层 = 最先 overlay）。
     raw_video = []   # (trackIdx, clipIdx, clip, track, media)
+    raw_audio = []   # (trackIdx, clipIdx, clip, track, media)
     raw_text = []    # (trackIdx, clipIdx, clip, track)
     total_duration = 0.0
     has_any_clip = False
+    has_audio_track = False
 
     for ti, track in enumerate(tracks):
         if not isinstance(track, dict):
@@ -311,12 +356,34 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
                 if media is None:
                     raise ExportValidationError(
                         "片段 %s 引用了未知素材 id: %s" % (clip.get("id"), mid))
+                if not (media.get("width") and media.get("height")) or media.get("kind") == "audio":
+                    raise ExportValidationError(
+                        "视频片段 %s 引用的不是视频素材，请把音频素材放到音频轨。" % clip.get("id"))
                 # streamId 必须可流式访问
                 stream_id = media.get("streamId")
                 if not stream_id or stream_id not in source_path_map:
                     raise ExportValidationError(
                         "素材 %s 的源不可用（streamId=%s）" % (mid, stream_id))
                 raw_video.append((ti, ci, clip, track, media))
+        elif kind == "audio":
+            has_audio_track = True
+            for ci, clip in enumerate(clips):
+                if not isinstance(clip, dict):
+                    continue
+                has_any_clip = True
+                mid = clip.get("mediaId")
+                media = media_by_id.get(mid)
+                if media is None:
+                    raise ExportValidationError(
+                        "音频片段 %s 引用了未知素材 id: %s" % (clip.get("id"), mid))
+                if not media.get("hasAudio") and media.get("kind") != "audio":
+                    raise ExportValidationError(
+                        "音频片段 %s 引用的素材没有可用音频。" % clip.get("id"))
+                stream_id = media.get("streamId")
+                if not stream_id or stream_id not in source_path_map:
+                    raise ExportValidationError(
+                        "素材 %s 的源不可用（streamId=%s）" % (mid, stream_id))
+                raw_audio.append((ti, ci, clip, track, media))
         elif kind == "text":
             for ci, clip in enumerate(clips):
                 if not isinstance(clip, dict):
@@ -327,10 +394,10 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
     if not has_any_clip:
         raise ExportValidationError("时间轴为空，无法导出")
 
-    # ---- 去重源、定 -i 顺序（按视频片段出现顺序）----
+    # ---- 去重源、定 -i 顺序（按音视频片段出现顺序）----
     ordered_ids = []
     seen = set()
-    for (_ti, _ci, clip, _tr, media) in raw_video:
+    for (_ti, _ci, clip, _tr, media) in raw_video + raw_audio:
         sid = media.get("streamId")
         if sid not in seen:
             seen.add(sid)
@@ -473,21 +540,80 @@ def validate_and_normalize(project, source_path_map, media_meta=None):
     # 文字按 z 序(底→顶) + 轨内 start 排序（链式 drawtext，后画在更上）
     text_clips.sort(key=lambda t: (t["trackIdx"], t["start"]))
 
+    # ---- 规范化音频轨片段（独立音频轴）----
+    audio_track_clips = []
+    for (ti, ci, clip, track, media) in raw_audio:
+        if bool(track.get("hidden", False)):
+            continue
+        cid = clip.get("id")
+        dur_src = media.get("duration")
+        try:
+            dur_src = float(dur_src) if dur_src not in (None, "", "N/A") else None
+        except (TypeError, ValueError):
+            dur_src = None
+        try:
+            start = float(clip.get("start", 0.0))
+        except (TypeError, ValueError):
+            start = 0.0
+        if start < 0:
+            start = 0.0
+        try:
+            cin = float(clip.get("in", 0.0))
+            cout = clip.get("out")
+            cout = float(cout) if cout is not None else None
+        except (TypeError, ValueError):
+            raise ExportValidationError("音频片段 %s 的 in/out 不是数字" % cid)
+        if cout is None:
+            cout = dur_src if dur_src else (cin + 1.0)
+        if cin < 0:
+            cin = 0.0
+        if dur_src:
+            if cout > dur_src:
+                cout = dur_src
+            if cin > dur_src:
+                cin = dur_src
+        if not (cout > cin):
+            raise ExportValidationError(
+                "音频片段 %s 的出点必须大于入点 (in=%s, out=%s)" % (cid, _fmt_num(cin), _fmt_num(cout)))
+        speed = _clampf(clip.get("speed", 1.0), 0.25, 4.0)
+        tl_len = (cout - cin) / speed
+        end = start + tl_len
+        if end > total_duration:
+            total_duration = end
+        audio_track_clips.append({
+            "streamIdx": stream_index[media["streamId"]],
+            "streamId": media["streamId"],
+            "mediaId": media.get("id"),
+            "hasAudio": bool(media.get("hasAudio", False)),
+            "in": cin, "out": cout, "start": start, "end": end,
+            "speed": speed, "tlLen": tl_len,
+            "trackIdx": ti, "clipIdx": ci,
+            "muted": bool(track.get("muted", False)),
+            "trackVolume": _clampf(track.get("volume", 1.0), 0.0, 1.0),
+        })
+    audio_track_clips.sort(key=lambda a: (a["trackIdx"], a["start"]))
+
     if total_duration <= 0:
         raise ExportValidationError("时间轴总时长为 0，无法导出")
 
-    # ---- 字体存在性校验（B13）----
+    # ---- 字体存在性校验（B13）：跨平台打开旧工程时，缺失字体自动回退到本机默认中文字体。----
+    fallback_font = find_default_font()
+    fallback_check = _native_path(fallback_font)
     for tn in text_clips:
         font = tn.get("fontFile") or TEXT_CLIP_DEFAULTS["fontFile"]
-        font_check = font.replace("/", os.sep).replace("\\", os.sep)
+        font_check = _native_path(font)
         if not os.path.isfile(font_check):
-            raise ExportValidationError("找不到字体文件: %s" % font)
+            if fallback_font and os.path.isfile(fallback_check):
+                font = fallback_font
+            else:
+                raise ExportValidationError("找不到字体文件: %s" % font)
         tn["fontFile"] = font
 
-    # ---- 音频片段（keepAudio 且未静音有声轨）----
+    # ---- 音频片段（新工程以独立音频轨为准；旧工程无音频轨时回退视频轨音频）----
     audio_clips = []
     if output["keepAudio"]:
-        for v in video_clips:
+        source_audio = audio_track_clips if has_audio_track else video_clips
+        for v in source_audio:
             if v["muted"] or v["trackVolume"] <= 0:
                 continue            # B9：muted/音量 0 的轨不参与混音
             if not v["hasAudio"]:
@@ -725,7 +851,7 @@ def write_textfiles(norm, work_dir):
 
 
 def find_ffmpeg():
-    """返回可用的 ffmpeg 可执行路径（PATH 优先，回退已知 WinGet 安装位置）。"""
+    """返回可用的 ffmpeg 可执行路径（随包/PATH 优先，回退常见平台安装位置）。"""
     return _find_tool("ffmpeg")
 
 
@@ -735,17 +861,35 @@ def find_ffprobe():
 
 def _find_tool(name):
     import shutil, sys
-    # 同目录/同 exe 目录回退：把 ffmpeg.exe / ffprobe.exe 放在本程序旁边即可（无需改 PATH）。
-    # 打包成 exe(frozen) 后优先用随包附带的 ffmpeg —— 放在 Lyra.exe 旁边或 ffmpeg\ 子目录。
+    # 同目录/同可执行目录回退：把 ffmpeg/ffprobe 放在本程序旁边即可（无需改 PATH）。
+    # 打包后优先用随包附带的 ffmpeg —— 放在 Lyra 可执行文件旁边或 ffmpeg 子目录。
     here = os.path.dirname(os.path.abspath(__file__))
     exedir = os.path.dirname(os.path.abspath(sys.executable))
-    for d in (exedir, os.path.join(exedir, "ffmpeg"), here):
-        p = os.path.join(d, name + ".exe")
-        if os.path.isfile(p):
-            return p
+    filenames = [name + ".exe"] if os.name == "nt" else [name, name + ".exe"]
+    for d in (exedir, os.path.join(exedir, "ffmpeg"), here, os.path.join(here, "ffmpeg")):
+        for fn in filenames:
+            p = os.path.join(d, fn)
+            if os.path.isfile(p):
+                return p
+    if sys.platform == "darwin":
+        # Homebrew 的 ffmpeg-full 是 keg-only；优先使用它以获得 drawtext/libass 等完整滤镜。
+        for d in ("/opt/homebrew/opt/ffmpeg-full/bin", "/usr/local/opt/ffmpeg-full/bin"):
+            p = os.path.join(d, name)
+            if os.path.isfile(p):
+                return p
     exe = shutil.which(name)
     if exe:
         return exe
+    if sys.platform == "darwin":
+        for d in ("/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"):
+            p = os.path.join(d, name)
+            if os.path.isfile(p):
+                return p
+    elif os.name != "nt":
+        for d in ("/usr/bin", "/usr/local/bin", "/snap/bin"):
+            p = os.path.join(d, name)
+            if os.path.isfile(p):
+                return p
     candidates = []
     localapp = os.environ.get("LOCALAPPDATA")
     if localapp:

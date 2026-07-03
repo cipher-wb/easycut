@@ -6,7 +6,7 @@ server.py (v2) — “简单剪辑”多轨非线性编辑器本地后端（纯 
   GET  /                              -> static/index.html
   GET  /static/<file>                 -> 静态资源（正确 mimetype，禁止路径穿越）
   GET  /api/stream?id=<streamId>      -> HTTP Range 流式回放（206/Accept-Ranges/Content-Range）
-  POST /api/pick                      -> 系统对话框选 mp4（零拷贝原路径），入库，返回 {media:[...]}
+  POST /api/pick                      -> 系统对话框选媒体（零拷贝原路径），入库，返回 {media:[...]}
   POST /api/pick-save                 -> 另存为对话框，返回 {path:...}
   GET  /api/fonts                     -> {fonts:[{name,path}...]}（仅列存在者）
   POST /api/upload      【新增】       -> 拖拽上传：流式保存到工作目录→ffprobe→缩略图→返回 media
@@ -17,7 +17,7 @@ server.py (v2) — “简单剪辑”多轨非线性编辑器本地后端（纯 
 约定（沿用 v1 已实测可靠结论）：
   - 监听 127.0.0.1，端口默认 8765，被占用自动 +1 找空闲。
   - 所有 JSON UTF-8（ensure_ascii=False）。所有文本读写 UTF-8（无 BOM）。
-  - subprocess 调 ffmpeg/ffprobe/picker 一律用 list 参数（含中文/空格路径安全）+ CREATE_NO_WINDOW 防黑框。
+  - subprocess 调 ffmpeg/ffprobe/picker 一律用 list 参数（含中文/空格路径安全）+ Windows CREATE_NO_WINDOW 防黑框。
   - 维护 streamId -> 绝对路径 映射，供 /api/stream；mediaId -> media 元数据，供 /api/thumb 与导出。
   - 启动后自动 webbrowser.open 打开首页。
 
@@ -38,6 +38,7 @@ import threading
 import subprocess
 import webbrowser
 import mimetypes
+import signal
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -50,15 +51,24 @@ if BASE_DIR not in sys.path:
 
 import ffmpeg_build  # noqa: E402
 
+def _platform_data_dir(app_name):
+    """返回当前系统推荐的用户可写应用数据目录。"""
+    home = os.path.expanduser("~")
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Application Support", app_name)
+    if os.name == "nt":
+        return os.path.join(os.environ.get("LOCALAPPDATA") or home, app_name)
+    return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(home, ".local", "share"), app_name)
+
+
 # 冻结(PyInstaller)与开发两种形态的路径分流：
 #   RESOURCE_DIR = 只读资源(static / picker)：冻结时在 PyInstaller 解包目录 _MEIPASS，开发时=源码目录。
-#   DATA_DIR     = 用户可写数据(工程 / 素材库 / AI 配置)：冻结时放 %LOCALAPPDATA%\Lyra
+#   DATA_DIR     = 用户可写数据(工程 / 素材库 / AI 配置)：冻结时放系统推荐的应用数据目录
 #                  （装到 Program Files 后程序目录通常不可写），开发时仍放源码目录（行为不变）。
 _FROZEN = bool(getattr(sys, "frozen", False))
 RESOURCE_DIR = getattr(sys, "_MEIPASS", BASE_DIR) if _FROZEN else BASE_DIR
 if _FROZEN:
-    _appdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    DATA_DIR = os.path.join(_appdata, "Lyra")
+    DATA_DIR = _platform_data_dir("Lyra")
 else:
     DATA_DIR = BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -93,17 +103,38 @@ _DUR_EPS = 0.05
 
 # 候选 CJK 字体（仅列存在者；见 contract_v2.md §8）
 FONT_CANDIDATES = [
-    ("微软雅黑", "msyh.ttc"),
-    ("微软雅黑 Bold", "msyhbd.ttc"),
-    ("黑体", "simhei.ttf"),
-    ("宋体", "simsun.ttc"),
-    ("楷体", "simkai.ttf"),
-    ("仿宋", "simfang.ttf"),
-    ("等线", "Deng.ttf"),
+    ("苹方 / PingFang", [
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/PingFangUI.ttc",
+    ]),
+    ("冬青黑体 / Hiragino Sans GB", ["/System/Library/Fonts/Hiragino Sans GB.ttc"]),
+    ("华文黑体 / STHeiti", [
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+        "/System/Library/Fonts/STHeiti Light.ttc",
+    ]),
+    ("宋体 / Songti", ["/System/Library/Fonts/Supplemental/Songti.ttc"]),
+    ("Arial Unicode", [
+        "/Library/Fonts/Arial Unicode.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    ]),
+    ("微软雅黑", ["msyh.ttc", "C:/Windows/Fonts/msyh.ttc"]),
+    ("微软雅黑 Bold", ["msyhbd.ttc", "C:/Windows/Fonts/msyhbd.ttc"]),
+    ("黑体 SimHei", ["simhei.ttf", "C:/Windows/Fonts/simhei.ttf"]),
+    ("宋体 SimSun", ["simsun.ttc", "C:/Windows/Fonts/simsun.ttc"]),
+    ("楷体 SimKai", ["simkai.ttf", "C:/Windows/Fonts/simkai.ttf"]),
+    ("仿宋 SimFang", ["simfang.ttf", "C:/Windows/Fonts/simfang.ttf"]),
+    ("等线 DengXian", ["Deng.ttf", "C:/Windows/Fonts/Deng.ttf"]),
+    ("Noto Sans CJK", [
+        "NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+    ]),
 ]
 
 # 接受的上传容器扩展名（ffprobe 仍会做实质校验）
-ACCEPT_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
+AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus"}
+ACCEPT_EXTS = VIDEO_EXTS | AUDIO_EXTS
 
 # 单个上传上限（防御，4GB）
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024
@@ -120,7 +151,7 @@ _jobs = {}               # jobId -> job dict
 _job_seq = 0             # job id 递增计数
 
 # 桌面（pywebview）原生导入：窗口引用 + 最近一次 OS 拖入文件的真实路径缓存。
-# 浏览器从不给真实路径（只能复制上传）；pywebview 的 WebView2 能拿到拖入文件的磁盘
+# 浏览器从不给真实路径（只能复制上传）；pywebview 原生窗口能拿到拖入文件的磁盘
 # 路径，于是可以「引用不复制」。下面缓存供 /api/link 按文件名匹配认领。
 _pywebview_window = None          # pywebview 窗口对象（仅原生窗口模式下非空）
 _recent_drops = []               # [{name, path, ts}]，记录最近拖入的真实路径
@@ -129,6 +160,7 @@ _RECENT_DROP_TTL = 8.0           # 秒：超过即视为过期
 
 FFMPEG = ffmpeg_build.find_ffmpeg()
 FFPROBE = ffmpeg_build.find_ffprobe()
+_FFMPEG_FILTER_CACHE = {}
 
 # Windows 下用 CREATE_NO_WINDOW 防止子进程弹黑框
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -176,6 +208,7 @@ def register_media(probe_info, imported, original_name=None):
     name = original_name or os.path.basename(path)
     media = {
         "id": media_id,
+        "kind": probe_info.get("kind") or ("video" if probe_info.get("width") and probe_info.get("height") else "audio"),
         "streamId": stream_id,
         "path": path.replace("\\", "/"),
         "name": name,
@@ -203,11 +236,12 @@ def snapshot_streams():
 
 
 def snapshot_media_meta():
-    """mediaId -> {streamId,width,height,duration,fps,hasAudio}（后端权威元数据，供导出覆盖前端回传）。"""
+    """mediaId -> {kind,streamId,width,height,duration,fps,hasAudio}（后端权威元数据，供导出覆盖前端回传）。"""
     with _state_lock:
         out = {}
         for mid, m in _media.items():
             out[mid] = {
+                "kind": m.get("kind") or ("video" if m.get("width") and m.get("height") else "audio"),
                 "streamId": m["streamId"],
                 "width": m["width"], "height": m["height"],
                 "duration": m["duration"], "fps": m["fps"],
@@ -220,7 +254,7 @@ def snapshot_media_meta():
 # ffprobe：解析源信息
 # ---------------------------------------------------------------------------
 def probe_source(path):
-    """对一个视频文件跑 ffprobe，返回 {path,width,height,duration,fps,hasAudio}。失败返回 None。"""
+    """对一个媒体文件跑 ffprobe，返回 {kind,path,width,height,duration,fps,hasAudio}。失败返回 None。"""
     args = [FFPROBE, "-hide_banner", "-v", "error",
             "-print_format", "json", "-show_format", "-show_streams", path]
     try:
@@ -244,7 +278,7 @@ def probe_source(path):
     fmt = info.get("format", {})
 
     vstream = None
-    has_audio = False
+    astream = None
     for s in streams:
         ct = s.get("codec_type")
         if ct == "video" and vstream is None:
@@ -252,22 +286,23 @@ def probe_source(path):
                 continue  # 跳过封面图
             vstream = s
         elif ct == "audio":
-            has_audio = True
-    if vstream is None:
+            if astream is None:
+                astream = s
+    if vstream is None and astream is None:
         for s in streams:
             if s.get("codec_type") == "video":
                 vstream = s
                 break
-    if vstream is None:
-        return None
-
-    width = int(vstream.get("width") or 0)
-    height = int(vstream.get("height") or 0)
-    if width <= 0 or height <= 0:
+    if vstream is None and astream is None:
         return None
 
     duration = None
-    for cand in (fmt.get("duration"), vstream.get("duration")):
+    duration_candidates = [fmt.get("duration")]
+    if vstream is not None:
+        duration_candidates.append(vstream.get("duration"))
+    if astream is not None:
+        duration_candidates.append(astream.get("duration"))
+    for cand in duration_candidates:
         if cand not in (None, "", "N/A"):
             try:
                 duration = float(cand)
@@ -277,15 +312,27 @@ def probe_source(path):
     if not duration or duration <= 0:
         duration = 0.0
 
-    fps = _parse_fps(vstream.get("avg_frame_rate")) or _parse_fps(vstream.get("r_frame_rate")) or 30.0
+    if vstream is not None:
+        width = int(vstream.get("width") or 0)
+        height = int(vstream.get("height") or 0)
+        if width <= 0 or height <= 0:
+            return None
+        fps = _parse_fps(vstream.get("avg_frame_rate")) or _parse_fps(vstream.get("r_frame_rate")) or 30.0
+        kind = "video"
+    else:
+        width = 0
+        height = 0
+        fps = 0.0
+        kind = "audio"
 
     return {
+        "kind": kind,
         "path": os.path.abspath(path),
         "width": width,
         "height": height,
         "duration": round(duration, 6),
         "fps": round(fps, 6),
-        "hasAudio": has_audio,
+        "hasAudio": astream is not None,
     }
 
 
@@ -313,6 +360,8 @@ def _thumb_cache_path(media_id):
 
 def generate_thumb(media):
     """为 media 生成缩略图（若已缓存则跳过）。返回缓存 jpg 绝对路径，失败返回 None。"""
+    if (media.get("kind") or ("video" if media.get("width") and media.get("height") else "audio")) != "video":
+        return None
     media_id = media["id"]
     out_jpg = _thumb_cache_path(media_id)
     if os.path.isfile(out_jpg) and os.path.getsize(out_jpg) > 0:
@@ -383,7 +432,7 @@ def native_import_available():
 
 
 def native_pick(multiple=True):
-    """用 pywebview 原生文件对话框选视频，返回真实绝对路径列表。
+    """用 pywebview 原生文件对话框选媒体，返回真实绝对路径列表。
     不可用 / 取消返回 None / []。比 tkinter 可靠（对话框挂在 app 窗口上，不会跑到后面）。"""
     win = _pywebview_window
     if win is None:
@@ -391,7 +440,7 @@ def native_pick(multiple=True):
     try:
         import webview
         exts = ";".join("*" + e for e in sorted(ACCEPT_EXTS))
-        file_types = ("视频文件 (%s)" % exts, "所有文件 (*.*)")
+        file_types = ("媒体文件 (%s)" % exts, "所有文件 (*.*)")
         res = win.create_file_dialog(
             webview.OPEN_DIALOG, allow_multiple=bool(multiple), file_types=file_types)
         if not res:
@@ -405,7 +454,7 @@ def native_pick(multiple=True):
 def native_save(suggest_name="导出视频.mp4"):
     """用 pywebview 原生「另存为」对话框，返回绝对路径。
     None=不可用（上层回退 tkinter picker）；""=用户取消；否则=路径。
-    冻结(exe)模式下必须走这个——picker.py 子进程在 frozen 里调 sys.executable 会变成重启自己。"""
+    冻结打包模式下必须走这个——picker.py 子进程在 frozen 里调 sys.executable 会变成重启自己。"""
     win = _pywebview_window
     if win is None:
         return None
@@ -510,14 +559,14 @@ def _safe_basename(name):
     bad = '<>:"/\\|?*'
     name = "".join(("_" if ch in bad else ch) for ch in name)
     name = name.strip().strip(".")
-    return name or "上传视频.mp4"
+    return name or "上传素材"
 
 
 # ---------------------------------------------------------------------------
 # 导出任务（后台线程跑 ffmpeg + 解析进度）
 # ---------------------------------------------------------------------------
 def _filter_offline_clips(project, source_path_map):
-    """导出前剔除引用了离线/缺源素材的视频片段（见 project_design.md §2.8）。
+    """导出前剔除引用了离线/缺源素材的音视频片段（见 project_design.md §2.8）。
     判定缺源：media.streamId 不在 source_path_map，或其路径不存在。
     返回 (filtered_project, warnings)。不修改入参（浅拷贝 tracks/clips）。
     全空交由后续 ExportValidationError 拦截，本函数不抛。"""
@@ -545,7 +594,7 @@ def _filter_offline_clips(project, source_path_map):
     new_tracks = []
     changed = False
     for tr in (project.get("tracks") or []):
-        if not isinstance(tr, dict) or tr.get("kind") != "video":
+        if not isinstance(tr, dict) or tr.get("kind") not in ("video", "audio"):
             new_tracks.append(tr)
             continue
         kept = []
@@ -699,6 +748,10 @@ def _run_ffmpeg_thread(job):
 def _guess_error_hint(tail):
     """从 ffmpeg stderr 尾部给一句中文提示，否则回显末行。"""
     low = tail.lower()
+    if "no such filter" in low and "drawtext" in low:
+        return ("当前 ffmpeg 不包含 drawtext 文字滤镜，无法导出文字轨。"
+                "macOS Homebrew 的普通 ffmpeg 可能不带字体滤镜，请安装 ffmpeg-full，"
+                "或换用带 freetype/fontconfig 的 ffmpeg 后重启 Lyra。")
     if "no such file or directory" in low and "font" in low:
         return "可能是字体文件路径无效。"
     if "permission denied" in low:
@@ -714,13 +767,70 @@ def _guess_error_hint(tail):
 # ---------------------------------------------------------------------------
 # 字体列表
 # ---------------------------------------------------------------------------
+def ffmpeg_has_filter(name):
+    """检测当前 ffmpeg 是否包含某个滤镜。失败时返回 False。"""
+    if name in _FFMPEG_FILTER_CACHE:
+        return _FFMPEG_FILTER_CACHE[name]
+    ok = False
+    try:
+        proc = subprocess.run(
+            [FFMPEG, "-hide_banner", "-filters"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=8,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        if proc.returncode == 0:
+            text = proc.stdout.decode("utf-8", "replace")
+            ok = any((" " + name + " ") in line or line.rstrip().endswith(" " + name)
+                     for line in text.splitlines())
+    except Exception:
+        ok = False
+    _FFMPEG_FILTER_CACHE[name] = ok
+    return ok
+
+
 def list_fonts():
-    fonts_dir = os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts")
+    search_dirs = []
+    if os.name == "nt":
+        search_dirs.append(os.path.join(os.environ.get("WINDIR", "C:\\Windows"), "Fonts"))
+    elif sys.platform == "darwin":
+        search_dirs += [
+            "/System/Library/Fonts",
+            "/System/Library/Fonts/Supplemental",
+            "/Library/Fonts",
+            os.path.expanduser("~/Library/Fonts"),
+        ]
+    else:
+        search_dirs += [
+            "/usr/share/fonts",
+            "/usr/local/share/fonts",
+            os.path.expanduser("~/.local/share/fonts"),
+            os.path.expanduser("~/.fonts"),
+        ]
+
     result = []
-    for name, fn in FONT_CANDIDATES:
-        p = os.path.join(fonts_dir, fn)
-        if os.path.isfile(p):
-            result.append({"name": name, "path": p.replace("\\", "/")})
+    seen = set()
+    for name, candidates in FONT_CANDIDATES:
+        if isinstance(candidates, str):
+            candidates = [candidates]
+        for cand in candidates:
+            paths = []
+            drive, _tail = os.path.splitdrive(cand)
+            if os.path.isabs(cand) or drive:
+                paths.append(cand)
+            else:
+                paths += [os.path.join(d, cand) for d in search_dirs]
+            hit = None
+            for p in paths:
+                if os.path.isfile(p):
+                    hit = os.path.abspath(p)
+                    break
+            if hit:
+                key = hit.lower()
+                if key not in seen:
+                    seen.add(key)
+                    result.append({"name": name, "path": hit.replace("\\", "/")})
+                break
     return result
 
 
@@ -838,7 +948,7 @@ def _sanitize_media_for_save(media):
     """保存时清洗一条 media：剥离 transient（streamId/thumbUrl/offline），path 正斜杠。"""
     if not isinstance(media, dict):
         return {}
-    keep = ("id", "path", "name", "width", "height",
+    keep = ("id", "kind", "path", "name", "width", "height",
             "duration", "fps", "hasAudio", "imported")
     out = {}
     for k in keep:
@@ -986,6 +1096,7 @@ def load_project(pid):
         if info is not None:
             # 在线：就地更新 media 的 streamId/dims/duration/fps/hasAudio
             m["streamId"] = sid
+            m["kind"] = info.get("kind") or ("video" if info.get("width") and info.get("height") else "audio")
             m["width"] = info["width"]
             m["height"] = info["height"]
             m["duration"] = info["duration"]
@@ -1013,6 +1124,7 @@ def load_project(pid):
             media_status.append({
                 "mediaId": mid,
                 "online": True,
+                "kind": m.get("kind"),
                 "streamId": sid,
                 "path": m["path"],
                 "width": info["width"], "height": info["height"],
@@ -1023,12 +1135,15 @@ def load_project(pid):
         else:
             # 离线：保留保存值，streamId=null
             m["streamId"] = None
+            if not m.get("kind"):
+                m["kind"] = "video" if m.get("width") and m.get("height") else "audio"
             if "thumbUrl" not in m and mid:
                 m["thumbUrl"] = "/api/thumb?id=%s" % mid
             offline_names.append(name)
             media_status.append({
                 "mediaId": mid,
                 "online": False,
+                "kind": m.get("kind"),
                 "streamId": None,
                 "path": (path or "").replace("\\", "/"),
                 "width": saved_w, "height": saved_h,
@@ -1061,11 +1176,12 @@ def relink_media(media_id, path):
     name = os.path.basename(str(path or "")) or "素材"
     sid, info = _probe_and_register(path)
     if info is None:
-        return {"online": False, "error": "无法解析视频文件：%s" % name}
+        return {"online": False, "error": "无法解析媒体文件：%s" % name}
     # 注册进全局 _media（同一 mediaId，新源），使重新链接后该素材的 /api/thumb 立即可用
     if media_id:
         register_loaded_media({
             "id": media_id,
+            "kind": info.get("kind") or ("video" if info.get("width") and info.get("height") else "audio"),
             "streamId": sid,
             "path": info["path"].replace("\\", "/"),
             "width": info["width"],
@@ -1076,6 +1192,7 @@ def relink_media(media_id, path):
         })
     return {
         "online": True,
+        "kind": info.get("kind") or ("video" if info.get("width") and info.get("height") else "audio"),
         "streamId": sid,
         "width": info["width"],
         "height": info["height"],
@@ -1673,9 +1790,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- /api/caps（前端探测：是否支持引用导入）----
     def _handle_caps(self):
-        self._send_json({"nativeImport": native_import_available()})
+        self._send_json({
+            "nativeImport": native_import_available(),
+            "drawtext": ffmpeg_has_filter("drawtext"),
+        })
 
-    # ---- /api/reveal（在资源管理器里打开并选中文件；本机服务，各模式都可用）----
+    # ---- /api/reveal（在系统文件管理器里打开/选中文件；本机服务，各模式都可用）----
     def _handle_reveal(self):
         body = self._read_json_body()
         path = (body.get("path") or "").strip()
@@ -1693,9 +1813,19 @@ class Handler(BaseHTTPRequestHandler):
                         self._send_json({"ok": False, "error": "文件或目录不存在"}); return
                     subprocess.Popen(['explorer', d])
                 self._send_json({"ok": True}); return
-            # 其它平台兜底（本项目仅 Windows，理论不会走到）
-            opener = "open" if sys.platform == "darwin" else "xdg-open"
+            if sys.platform == "darwin":
+                if os.path.isfile(norm):
+                    subprocess.Popen(["open", "-R", norm])  # Finder 中选中该文件
+                else:
+                    target = norm if os.path.isdir(norm) else os.path.dirname(norm)
+                    if not os.path.isdir(target):
+                        self._send_json({"ok": False, "error": "文件或目录不存在"}); return
+                    subprocess.Popen(["open", target])
+                self._send_json({"ok": True}); return
+            opener = "xdg-open"
             target = norm if os.path.exists(norm) else os.path.dirname(norm)
+            if not os.path.exists(target):
+                self._send_json({"ok": False, "error": "文件或目录不存在"}); return
             subprocess.Popen([opener, target])
             self._send_json({"ok": True})
         except Exception as e:
@@ -1742,7 +1872,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # 优先用 fields['name']，否则 multipart filename
-        raw_name = fields.get("name") or filename or "上传视频.mp4"
+        raw_name = fields.get("name") or filename or "上传素材"
         name = _safe_basename(raw_name)
         ext = os.path.splitext(name)[1].lower()
         if ext and ext not in ACCEPT_EXTS:
@@ -1764,7 +1894,7 @@ class Handler(BaseHTTPRequestHandler):
                 os.remove(dest)
             except OSError:
                 pass
-            self._send_error_json(400, "无法解析视频文件：%s" % name)
+            self._send_error_json(400, "无法解析媒体文件：%s" % name)
             return
 
         media = register_media(info, imported="upload", original_name=name)
@@ -1891,6 +2021,7 @@ class Handler(BaseHTTPRequestHandler):
 
         file_size = os.path.getsize(path)
         range_header = self.headers.get("Range")
+        content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
 
         if range_header:
             start, end = self._parse_range(range_header, file_size)
@@ -1902,7 +2033,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             length = end - start + 1
             self.send_response(206)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", content_type)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, file_size))
             self.send_header("Content-Length", str(length))
@@ -1911,7 +2042,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file_range(path, start, length)
         else:
             self.send_response(200)
-            self.send_header("Content-Type", "video/mp4")
+            self.send_header("Content-Type", content_type)
             self.send_header("Accept-Ranges", "bytes")
             self.send_header("Content-Length", str(file_size))
             self.send_header("Cache-Control", "no-store")
@@ -2001,46 +2132,72 @@ def bind_server(host, start_port, handler, max_tries=80):
 
 
 # =====================================================================
-# 桌面模式：用本机 Edge/Chrome 的「应用窗口(--app)」模式把网页变成
+# 桌面模式：用本机 Edge/Chrome/Chromium 的「应用窗口(--app)」模式把网页变成
 # 一个无地址栏/无标签页的独立窗口（看起来像桌面软件，零额外依赖）。
 # 关掉该窗口即退出程序。找不到浏览器时回退为普通浏览器标签。
 # =====================================================================
 def find_app_browser():
-    """定位可用于 --app 模式的浏览器，优先 Edge，其次 Chrome。
+    """定位可用于 --app 模式的浏览器，优先 Edge，其次 Chrome/Chromium。
     返回 (exe路径, 名称) 或 (None, None)。"""
     candidates = []
-    # 1) 注册表 App Paths（最可靠）
-    try:
-        import winreg
-        for exe in ("msedge.exe", "chrome.exe"):
-            for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
-                try:
-                    key = winreg.OpenKey(
-                        root,
-                        r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\\" + exe)
-                    val, _ = winreg.QueryValueEx(key, None)
-                    winreg.CloseKey(key)
-                    if val:
-                        candidates.append((val, "Edge" if "edge" in exe else "Chrome"))
-                except OSError:
-                    pass
-    except Exception:
-        pass
-    # 2) 常见安装路径
-    pf = os.environ.get("ProgramFiles", r"C:\Program Files")
-    pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-    local = os.environ.get("LOCALAPPDATA", "")
-    fixed = [
-        (os.path.join(pfx86, r"Microsoft\Edge\Application\msedge.exe"), "Edge"),
-        (os.path.join(pf, r"Microsoft\Edge\Application\msedge.exe"), "Edge"),
-        (os.path.join(pf, r"Google\Chrome\Application\chrome.exe"), "Chrome"),
-        (os.path.join(pfx86, r"Google\Chrome\Application\chrome.exe"), "Chrome"),
-    ]
-    if local:
-        fixed.append((os.path.join(local, r"Google\Chrome\Application\chrome.exe"), "Chrome"))
-    candidates += fixed
-    # 3) PATH
-    for exe, name in (("msedge", "Edge"), ("chrome", "Chrome")):
+    if os.name == "nt":
+        # 1) Windows 注册表 App Paths（最可靠）
+        try:
+            import winreg
+            for exe in ("msedge.exe", "chrome.exe"):
+                for root in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+                    try:
+                        key = winreg.OpenKey(
+                            root,
+                            r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\\" + exe)
+                        val, _ = winreg.QueryValueEx(key, None)
+                        winreg.CloseKey(key)
+                        if val:
+                            candidates.append((val, "Edge" if "edge" in exe else "Chrome"))
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        # 2) Windows 常见安装路径
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        pfx86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        local = os.environ.get("LOCALAPPDATA", "")
+        fixed = [
+            (os.path.join(pfx86, r"Microsoft\Edge\Application\msedge.exe"), "Edge"),
+            (os.path.join(pf, r"Microsoft\Edge\Application\msedge.exe"), "Edge"),
+            (os.path.join(pf, r"Google\Chrome\Application\chrome.exe"), "Chrome"),
+            (os.path.join(pfx86, r"Google\Chrome\Application\chrome.exe"), "Chrome"),
+        ]
+        if local:
+            fixed.append((os.path.join(local, r"Google\Chrome\Application\chrome.exe"), "Chrome"))
+        candidates += fixed
+        path_names = (("msedge", "Edge"), ("chrome", "Chrome"))
+    elif sys.platform == "darwin":
+        app_roots = ["/Applications", os.path.expanduser("~/Applications")]
+        for root in app_roots:
+            candidates += [
+                (os.path.join(root, "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"), "Edge"),
+                (os.path.join(root, "Google Chrome.app", "Contents", "MacOS", "Google Chrome"), "Chrome"),
+                (os.path.join(root, "Chromium.app", "Contents", "MacOS", "Chromium"), "Chromium"),
+            ]
+        path_names = (
+            ("msedge", "Edge"),
+            ("microsoft-edge", "Edge"),
+            ("google-chrome", "Chrome"),
+            ("chromium", "Chromium"),
+        )
+    else:
+        path_names = (
+            ("microsoft-edge", "Edge"),
+            ("microsoft-edge-stable", "Edge"),
+            ("google-chrome", "Chrome"),
+            ("google-chrome-stable", "Chrome"),
+            ("chromium", "Chromium"),
+            ("chromium-browser", "Chromium"),
+        )
+
+    # PATH
+    for exe, name in path_names:
         p = shutil.which(exe)
         if p:
             candidates.append((p, name))
@@ -2075,8 +2232,85 @@ def launch_app_window(url):
         return None, None
 
 
+def app_browser_profile_pids():
+    """返回使用 Lyra 独立浏览器 profile 的进程 pid。
+    macOS 上 Chrome/Edge 可能把 --app 启动请求交给已有浏览器进程后立刻退出，
+    所以不能只用 Popen.wait() 判断窗口是否关闭。"""
+    if os.name == "nt":
+        return []
+    try:
+        out = subprocess.check_output(
+            ["ps", "-axo", "pid=,command="],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except Exception:
+        return []
+    pids = []
+    needles = (
+        "--user-data-dir=%s" % APP_PROFILE_DIR,
+        "--user-data-dir=%s" % os.path.abspath(APP_PROFILE_DIR),
+    )
+    my_pid = os.getpid()
+    for line in out.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        parts = s.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid == my_pid:
+            continue
+        cmd = parts[1]
+        if any(n in cmd for n in needles):
+            pids.append(pid)
+    return pids
+
+
+def wait_app_window_closed(proc):
+    """等待浏览器应用窗口关闭。
+    Windows 的 Edge/Chrome 进程句柄可靠；macOS 上用独立 profile 进程监控。"""
+    if sys.platform != "darwin":
+        proc.wait()
+        return
+
+    deadline = time.time() + 5.0
+    saw_profile_process = False
+    while time.time() < deadline:
+        if app_browser_profile_pids():
+            saw_profile_process = True
+            break
+        time.sleep(0.1)
+
+    if not saw_profile_process:
+        proc.wait()
+        return
+
+    while app_browser_profile_pids():
+        time.sleep(0.5)
+
+
+def terminate_app_window(proc):
+    """尽量关闭本次 Lyra 应用窗口，不影响用户日常浏览器 profile。"""
+    try:
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+    except Exception:
+        pass
+    if sys.platform == "darwin":
+        for pid in app_browser_profile_pids():
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except Exception:
+                pass
+
+
 def run_native_window(url):
-    """首选桌面外壳：pywebview 原生窗口（Windows 走 WebView2）。
+    """首选桌面外壳：pywebview 原生窗口（Windows 走 WebView2，macOS 走系统 WebKit）。
     成功打开并阻塞至窗口关闭后返回 True；未安装/初始化失败返回 False（交上层回退）。
     注意：pywebview 的 GUI 事件循环必须跑在主线程。"""
     global _pywebview_window
@@ -2122,6 +2356,8 @@ def main():
     fonts = list_fonts()
     print("  可用 CJK 字体   : %d 个 (%s)" % (
         len(fonts), ", ".join(f["name"] for f in fonts) if fonts else "无"))
+    has_drawtext = ffmpeg_has_filter("drawtext")
+    print("  ffmpeg drawtext : %s" % ("可用" if has_drawtext else "不可用（文字轨导出会失败）"))
     print("  静态目录        : %s" % STATIC_DIR)
     print("  工作目录        : %s" % WORK_ROOT)
     print("  工程库          : %s" % PROJECTS_DIR)
@@ -2135,7 +2371,7 @@ def main():
         srv_thread.start()
         time.sleep(0.4)  # 等服务起来再连
 
-        # 首选：pywebview 原生窗口（WebView2，真·桌面 app，不依赖外部浏览器）
+        # 首选：pywebview 原生窗口（Windows WebView2 / macOS WebKit，真·桌面 app，不依赖外部浏览器）
         print("-" * 60)
         print("  正在打开桌面窗口…（关闭窗口即可退出程序）")
         print("-" * 60)
@@ -2145,7 +2381,7 @@ def main():
             print("[停止] 窗口已关闭，服务已停止。")
             return
 
-        # 回退①：Edge/Chrome 应用窗口（未装 pywebview 时）
+        # 回退①：Edge/Chrome/Chromium 应用窗口（未装 pywebview 时）
         proc, name = launch_app_window(url)
         if proc is not None:
             print("-" * 60)
@@ -2153,13 +2389,10 @@ def main():
             print("  关闭该窗口即可退出程序，无需手动停服。")
             print("-" * 60)
             try:
-                proc.wait()  # 阻塞直到应用窗口被关闭
+                wait_app_window_closed(proc)  # 阻塞直到应用窗口被关闭
             except KeyboardInterrupt:
                 print("\n[停止] 收到 Ctrl+C...")
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+                terminate_app_window(proc)
             finally:
                 httpd.shutdown()
                 httpd.server_close()
@@ -2167,7 +2400,7 @@ def main():
             return
         # 回退②：连浏览器都没有 → 普通浏览器标签模式
         print("-" * 60)
-        print("  未找到 Edge/Chrome，回退为浏览器标签模式。")
+        print("  未找到 Edge/Chrome/Chromium，回退为浏览器标签模式。")
         print("  请保持本窗口开启；按 Ctrl+C 可停止服务。")
         print("-" * 60)
         try:
